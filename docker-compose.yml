@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: alpha_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: n8n
+      POSTGRES_PASSWORD: n8n_password
+      POSTGRES_DB: crime_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: alpha_n8n
+    restart: always
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_PORT=5678
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  postgres_data:
+  n8n_data:

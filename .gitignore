@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pyd
+venv/
+env/
+.venv/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker volumes & data
+postgres_data/
+n8n_data/
+.n8n/
+
+# OS & IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
