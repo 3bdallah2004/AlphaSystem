@@ -1,0 +1,14 @@
+.git
+.env
+.venv
+venv
+env
+data
+n8n
+__pycache__
+*.pyc
+*.db
+*.log
+.playwright-mcp
+.vscode
+.idea

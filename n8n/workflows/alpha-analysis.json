@@ -1,0 +1,390 @@
+{
+  "id": "AlphaAnalysis001",
+  "name": "Alpha - Case Analysis",
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "0c1f6a52-4c1e-4c5e-9c1a-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        200
+      ],
+      "webhookId": "7d0c9a4e-1b7f-4c55-9d1e-a1b2c3d4e5f6",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "alpha-analyze",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "0c1f6a52-4c1e-4c5e-9c1a-000000000002",
+      "name": "Health check?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        220,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b1f0c7de-0000-4000-8000-000000000001",
+              "leftValue": "={{ $json.body.ping === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "0c1f6a52-4c1e-4c5e-9c1a-000000000003",
+      "name": "Respond health",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        460,
+        60
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, llm_configured: !!(($env.LLM_PROVIDERS || '') || $env.LLM_1_KEY || $env.LLM_2_KEY || $env.LLM_3_KEY || $env.LLM_API_KEY), model: $env.LLM_1_MODEL || $env.LLM_MODEL || null, providers: $env.LLM_PROVIDERS || null, vision: !!($env.LLM_1_VISION_MODEL || $env.LLM_2_VISION_MODEL || $env.LLM_3_VISION_MODEL || $env.VISION_MODEL) }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "0c1f6a52-4c1e-4c5e-9c1a-000000000004",
+      "name": "Call LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        700,
+        440
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env[\"LLM_\" + $json.body.provider_key + \"_URL\"] || ($json.body.use_backup && $env.BACKUP_LLM_URL) || ($env.LLM_BASE_URL || 'https://api.openai.com/v1')).replace(/\\/+$/, '') + '/chat/completions' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env[\"LLM_\" + $json.body.provider_key + \"_KEY\"] || ($json.body.use_backup && $env.BACKUP_LLM_KEY) || $env.LLM_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: ($env[\"LLM_\" + $json.body.provider_key + \"_MODEL\"] || ($json.body.use_backup && $env.BACKUP_LLM_MODEL) || ($env.LLM_MODEL || 'gpt-4.1-mini')), temperature: 0.3, messages: [{ role: 'system', content: $json.body.language === 'en' ? \"You are an expert criminal investigation analyst. Analyze the submitted case report and return a structured report in clear English. Return only a valid JSON object with no text before or after it, using these keys in this order: \\\"Case summary\\\" (string), \\\"Key facts\\\" (list of strings), \\\"Evidence and leads\\\" (list of strings), \\\"Parties involved\\\" (list of strings), \\\"Possible hypotheses\\\" (list of strings), \\\"Recommended next steps\\\" (list of strings), \\\"Severity\\\" (string: low, medium, or high, with a short reason). Do not invent facts that are not in the report; if important information is missing, say so explicitly. The report may be written in Arabic; write your analysis in English regardless.\" : \"أنت محلل تحقيقات جنائية خبير. حلّل البلاغ المقدَّم وأعد تقريراً منظماً باللغة العربية الفصحى. أعد كائن JSON صالحاً فقط دون أي نص قبله أو بعده، وبالمفاتيح التالية بهذا الترتيب: «ملخص القضية» (نص)، «الوقائع الرئيسية» (قائمة نصوص)، «الأدلة والقرائن» (قائمة نصوص)، «الأطراف المعنية» (قائمة نصوص)، «الفرضيات المحتملة» (قائمة نصوص)، «الخطوات التحقيقية المقترحة» (قائمة نصوص)، «مستوى الخطورة» (نص: منخفض أو متوسط أو مرتفع مع سبب مختصر). لا تخترع وقائع غير موجودة في البلاغ، وإذا نقصت معلومة مهمة فاذكر ذلك صراحة.\" }, { role: 'user', content: $json.body.language === 'en' ? ('Case title: ' + ($json.body.case_name || 'Not provided') + '\\n' + 'Case number: ' + ($json.body.case_number || 'Not provided') + '\\n' + 'Type: ' + ($json.body.case_type || 'General') + '\\n' + 'Location: ' + ($json.body.incident_location || 'Not provided') + '\\n' + 'Incident date: ' + ($json.body.incident_date || 'Not provided') + '\\n\\n' + 'What happened:\\n' + ($json.body.case_text || '')) : ('اسم القضية: ' + ($json.body.case_name || 'غير محدد') + '\\n' + 'رقم القضية: ' + ($json.body.case_number || 'غير محدد') + '\\n' + 'التصنيف: ' + ($json.body.case_type || 'عام') + '\\n' + 'موقع الحادثة: ' + ($json.body.incident_location || 'غير محدد') + '\\n' + 'تاريخ الحادثة: ' + ($json.body.incident_date || 'غير محدد') + '\\n\\n' + 'تفاصيل البلاغ:\\n' + ($json.body.case_text || '')) }] }) }}",
+        "options": {
+          "timeout": 110000
+        }
+      }
+    },
+    {
+      "id": "0c1f6a52-4c1e-4c5e-9c1a-000000000009",
+      "name": "Chat?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        460,
+        620
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b1f0c7de-0000-4000-8000-000000000003",
+              "leftValue": "={{ $json.body.mode === 'chat' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "0c1f6a52-4c1e-4c5e-9c1a-000000000010",
+      "name": "Chat with LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        700,
+        620
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env[\"LLM_\" + $json.body.provider_key + \"_URL\"] || ($json.body.use_backup && $env.BACKUP_LLM_URL) || ($env.LLM_BASE_URL || 'https://api.openai.com/v1')).replace(/\\/+$/, '') + '/chat/completions' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env[\"LLM_\" + $json.body.provider_key + \"_KEY\"] || ($json.body.use_backup && $env.BACKUP_LLM_KEY) || $env.LLM_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: ($env[\"LLM_\" + $json.body.provider_key + \"_MODEL\"] || ($json.body.use_backup && $env.BACKUP_LLM_MODEL) || ($env.LLM_MODEL || 'gpt-4.1-mini')), temperature: 0.2, messages: [{ role: 'system', content: $json.body.language === 'en' ? \"You are an expert criminal investigation analyst answering follow-up questions about a case you already analysed. You have the original report, your analysis, and the conversation so far.\\n\\nRules:\\n- Answer the investigator's question directly and concisely, in clear English.\\n- Build on the existing analysis and on anything said earlier in the conversation. Do not repeat the whole analysis unless asked.\\n- New information, documents, images or video may arrive inside the question; treat them as evidence and say how they change or confirm the analysis.\\n- Never invent facts. If the question cannot be answered from what you have, say what is missing.\\n- Reply in plain prose or short lists. Do not return JSON.\" : \"أنت محلل تحقيقات جنائية خبير تجيب على أسئلة متابعة حول قضية حلّلتها سابقاً. لديك نص البلاغ الأصلي وتحليلك والمحادثة السابقة.\\n\\nالقواعد:\\n- أجب عن سؤال المحقق مباشرة وبإيجاز، باللغة العربية الفصحى.\\n- ابنِ على التحليل السابق وعلى ما قيل في المحادثة. لا تُعد التحليل كاملاً إلا إذا طُلب منك.\\n- قد تصل معلومات أو مستندات أو صور أو فيديو جديدة داخل السؤال؛ اعتبرها أدلة وبيّن كيف تغيّر التحليل أو تؤكده.\\n- لا تخترع وقائع. إذا لم يمكن الإجابة من المتاح فاذكر ما ينقص.\\n- أجب بنص عادي أو قوائم قصيرة. لا تُعد JSON.\" }, { role: 'system', content: ($json.body.language === 'en' ? 'Case title: ' : 'اسم القضية: ') + ($json.body.case_name || '—') + '\\n' + ($json.body.language === 'en' ? 'Case number: ' : 'رقم القضية: ') + ($json.body.case_number || '—') + '\\n' + ($json.body.language === 'en' ? 'Type: ' : 'التصنيف: ') + ($json.body.case_type || '—') + '\\n' + ($json.body.language === 'en' ? 'Location: ' : 'الموقع: ') + ($json.body.incident_location || '—') + '\\n' + ($json.body.language === 'en' ? 'Incident date: ' : 'تاريخ الحادثة: ') + ($json.body.incident_date || '—') + '\\n\\n' + ($json.body.language === 'en' ? 'Original report:\\n' : 'نص البلاغ:\\n') + ($json.body.case_text || '') + '\\n\\n' + ($json.body.language === 'en' ? 'Your earlier analysis:\\n' : 'تحليلك السابق:\\n') + ($json.body.report_text || '') }, ...($json.body.history || []), { role: 'user', content: $json.body.question || '' }] }) }}",
+        "options": {
+          "timeout": 110000
+        }
+      }
+    },
+    {
+      "id": "0c1f6a52-4c1e-4c5e-9c1a-000000000007",
+      "name": "Suggest details?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b1f0c7de-0000-4000-8000-000000000002",
+              "leftValue": "={{ $json.body.mode === 'suggest' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "0c1f6a52-4c1e-4c5e-9c1a-000000000008",
+      "name": "Suggest with LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        700,
+        160
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env[\"LLM_\" + $json.body.provider_key + \"_URL\"] || ($json.body.use_backup && $env.BACKUP_LLM_URL) || ($env.LLM_BASE_URL || 'https://api.openai.com/v1')).replace(/\\/+$/, '') + '/chat/completions' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env[\"LLM_\" + $json.body.provider_key + \"_KEY\"] || ($json.body.use_backup && $env.BACKUP_LLM_KEY) || $env.LLM_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: ($env[\"LLM_\" + $json.body.provider_key + \"_MODEL\"] || ($json.body.use_backup && $env.BACKUP_LLM_MODEL) || ($env.LLM_MODEL || 'gpt-4.1-mini')), temperature: 0, messages: [{ role: 'system', content: \"Extract case details from a police report. Return only a valid JSON object with no text before or after it, with these keys: \\\"title\\\" (a short case title of at most 8 words, written in LANGUAGE), \\\"case_type\\\" (exactly one of: عام, سرقة, احتيال مالي, جرائم إلكترونية, اعتداء, فقدان أو اختفاء, أخرى), \\\"location\\\" (the incident location as described in the report, written in LANGUAGE, or an empty string), \\\"date\\\" (the incident date as YYYY-MM-DD only if the report states a full date, otherwise an empty string). Do not guess missing details.\".split('LANGUAGE').join($json.body.language === 'en' ? 'English' : 'Arabic') }, { role: 'user', content: $json.body.case_text || '' }] }) }}",
+        "options": {
+          "timeout": 55000
+        }
+      }
+    },
+    {
+      "id": "0c1f6a52-4c1e-4c5e-9c1a-000000000005",
+      "name": "Respond report",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        220
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ output: $json.choices[0].message.content }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "0c1f6a52-4c1e-4c5e-9c1a-000000000006",
+      "name": "Respond LLM error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        440
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: 'LLM request failed: ' + ($json.error?.message || JSON.stringify($json.error || $json)) + ($json.error?.description ? ' - ' + $json.error.description : '') }) }}",
+        "options": {
+          "responseCode": 502
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Health check?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Health check?": {
+      "main": [
+        [
+          {
+            "node": "Respond health",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Chat?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat?": {
+      "main": [
+        [
+          {
+            "node": "Chat with LLM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Suggest details?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat with LLM": {
+      "main": [
+        [
+          {
+            "node": "Respond report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond LLM error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suggest details?": {
+      "main": [
+        [
+          {
+            "node": "Suggest with LLM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suggest with LLM": {
+      "main": [
+        [
+          {
+            "node": "Respond report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond LLM error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Respond report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond LLM error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

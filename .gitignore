@@ -1,0 +1,33 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+env/
+.venv/
+
+# App data (local runs)
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker volumes & data
+postgres_data/
+n8n_data/
+.n8n/
+
+# Tooling
+.playwright-mcp/
+.pytest_cache/
+
+# OS & IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

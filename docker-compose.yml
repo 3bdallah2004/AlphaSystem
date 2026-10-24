@@ -1,0 +1,122 @@
+name: alpha
+
+# The model providers. Both n8n (which runs the analysis) and the app (which reads images)
+# read these. Compose cannot enumerate variables, so a new provider needs a line here too:
+# add LLM_4_* to .env, then copy its three lines below.
+x-llm-env: &llm-env
+  LLM_PROVIDERS: ${LLM_PROVIDERS:-}
+  LLM_1_LABEL: ${LLM_1_LABEL:-}
+  LLM_1_URL: ${LLM_1_URL:-}
+  LLM_1_KEY: ${LLM_1_KEY:-}
+  LLM_1_MODEL: ${LLM_1_MODEL:-}
+  LLM_1_VISION_MODEL: ${LLM_1_VISION_MODEL:-}
+  LLM_2_LABEL: ${LLM_2_LABEL:-}
+  LLM_2_URL: ${LLM_2_URL:-}
+  LLM_2_KEY: ${LLM_2_KEY:-}
+  LLM_2_MODEL: ${LLM_2_MODEL:-}
+  LLM_2_VISION_MODEL: ${LLM_2_VISION_MODEL:-}
+  LLM_3_LABEL: ${LLM_3_LABEL:-}
+  LLM_3_URL: ${LLM_3_URL:-}
+  LLM_3_KEY: ${LLM_3_KEY:-}
+  LLM_3_MODEL: ${LLM_3_MODEL:-}
+  LLM_3_VISION_MODEL: ${LLM_3_VISION_MODEL:-}
+  ALPHA_VISION_ENABLED: ${ALPHA_VISION_ENABLED:-1}
+  ALPHA_VISION_MAX_TOKENS: ${ALPHA_VISION_MAX_TOKENS:-1200}
+  ALPHA_VISION_RETRY_MAX_TOKENS: ${ALPHA_VISION_RETRY_MAX_TOKENS:-3000}
+  ALPHA_PROVIDER_COOLDOWN: ${ALPHA_PROVIDER_COOLDOWN:-1800}
+
+x-n8n-env: &n8n-env
+  DB_TYPE: postgresdb
+  DB_POSTGRESDB_HOST: postgres
+  DB_POSTGRESDB_PORT: 5432
+  DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-n8n}
+  DB_POSTGRESDB_USER: ${POSTGRES_USER:-n8n}
+  DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (copy .env.example to .env)}
+  GENERIC_TIMEZONE: ${TIMEZONE:-UTC}
+  TZ: ${TIMEZONE:-UTC}
+  N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+  N8N_DIAGNOSTICS_ENABLED: "false"
+  # The analysis workflow reads the LLM settings below through $env.
+  N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+  <<: *llm-env
+  ALPHA_AUDIO_TRANSCRIPTION_MODEL: ${ALPHA_AUDIO_TRANSCRIPTION_MODEL:-whisper-1}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-n8n}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (copy .env.example to .env)}
+      POSTGRES_DB: ${POSTGRES_DB:-n8n}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-shot job: imports and publishes (activates) the bundled analysis workflow, then exits.
+  # Re-running it is safe: the workflow keeps the same ID and is simply overwritten.
+  n8n-import:
+    image: n8nio/n8n:${N8N_VERSION:-2.44.6}
+    environment: *n8n-env
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - n8n import:workflow --input=/workflows/alpha-analysis.json && n8n publish:workflow --id=AlphaAnalysis001
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  n8n:
+    image: n8nio/n8n:${N8N_VERSION:-2.44.6}
+    restart: unless-stopped
+    environment: *n8n-env
+    ports:
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    extra_hosts:
+      # Lets LLM_BASE_URL point at a model running on the host (e.g. Ollama) on Linux too.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      n8n-import:
+        condition: service_completed_successfully
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      ALPHA_WEBHOOK_URL: http://n8n:5678/webhook/alpha-analyze
+      ALPHA_DB_PATH: /data/alpha_database.db
+      ALPHA_ATTACHMENTS_DIR: /data/attachments
+      ALPHA_MAX_ATTACHMENT_MB: ${ALPHA_MAX_ATTACHMENT_MB:-200}
+      ALPHA_REQUEST_TIMEOUT: ${ALPHA_REQUEST_TIMEOUT:-120}
+      # The location name of a case becomes a map pin; only the name leaves the server.
+      ALPHA_GEOCODE_ENABLED: ${ALPHA_GEOCODE_ENABLED:-1}
+      ALPHA_GEOCODE_BOUNDS: ${ALPHA_GEOCODE_BOUNDS:-33.4,34.2;31.2,35.9}
+      # Attachments are read before analysis: a vision model describes images and video frames
+      # for the (usually text-only) analysis model. Providers come from the shared block above.
+      <<: *llm-env
+      ALPHA_AUDIO_TRANSCRIPTION_MODEL: ${ALPHA_AUDIO_TRANSCRIPTION_MODEL:-whisper-1}
+    ports:
+      - "127.0.0.1:${APP_PORT:-8501}:8501"
+    volumes:
+      - app_data:/data
+    depends_on:
+      n8n:
+        condition: service_healthy
+
+volumes:
+  db_data:
+  n8n_data:
+  app_data:
