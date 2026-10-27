@@ -1,140 +1,126 @@
-# 🚀 Alpha System | نظام إدارة التحقيقات الجنائية الذكي
+# Alpha Investigation System
 
-نظام لإدارة القضايا وتحليلها بالذكاء الاصطناعي. الواجهة المعتمدة **React** تعمل على المنفذ `8601` وتتصل بـ **FastAPI**. يستخدم النظام قاعدة SQLite للقضايا والملفات، ويرسل التحليلات إلى **n8n** الذي يستخدم قاعدة **PostgreSQL**. أُزيلت واجهة Streamlit القديمة وملفات تشغيلها؛ React هي الواجهة الوحيدة للموقع.
+Alpha is a bilingual (Arabic and English) application for managing investigation cases and reviewing AI-assisted analysis. Users can organize case details, work with supporting files, chat about case information, and view incident locations on a map.
 
-الواجهة متاحة بالعربية والإنجليزية (زر التبديل أعلى يمين الصفحة)، ويُكتب التحليل بلغة الواجهة المختارة.
-تتضمن الواجهة صفحة «من أنا» للتعريف بالمطوّر، مع فيديو وروابط واتساب وجيت هب.
+The React interface runs on port `8601` and communicates with a FastAPI backend. The backend stores case data and attachments in SQLite and sends analysis requests to an n8n workflow. n8n uses PostgreSQL for its workflows and execution data. The former Streamlit interface has been removed.
 
----
+The interface and generated analysis are available in Arabic and English. The About page includes developer information and contact links.
 
-## 🎬 فيديو العرض التوضيحي
-
-[![شاهد فيديو الديمو](https://img.youtube.com/vi/70hwSCwHCR8/maxresdefault.jpg)](https://www.youtube.com/watch?v=70hwSCwHCR8)
-
----
-
-## 🧭 كيف يعمل النظام
+## Architecture
 
 ```text
-المتصفح :8601 ──► web (React + nginx) ──► api (FastAPI :8000) ──► n8n :5678 ──► نموذج لغوي / رؤية
-                                                │
-                                        SQLite + المرفقات
+Browser :8601 -> React + nginx -> FastAPI :8000 -> n8n :5678 -> language / vision model
+                                     |
+                                SQLite + attachments
+
+n8n -> PostgreSQL
 ```
 
-- **web**: واجهة React الجديدة، وتخدم ملفاتها على `8601` وتمرر `/api` إلى FastAPI.
-- **api**: واجهة FastAPI، وتستخدم وحدات التحليل والمحادثة والمرفقات المشتركة في `app/` وتحفظ البيانات في SQLite.
-- **n8n**: يحتوي سير العمل `n8n/workflows/alpha-analysis.json`، ويُستورد ويُفعَّل **تلقائياً** عند التشغيل.
-- **postgres**: قاعدة بيانات n8n (سير العمل وسجل التنفيذ).
+- **Web:** React application served by nginx on port `8601`; nginx forwards `/api` requests to FastAPI.
+- **API:** FastAPI service that uses the shared analysis, chat, and attachment modules in `app/`.
+- **n8n:** Runs the workflow in `n8n/workflows/alpha-analysis.json`. The workflow is imported and published automatically at startup.
+- **PostgreSQL:** Stores n8n workflows and execution data.
+- **SQLite:** Stores investigation cases, messages, reports, and attachment metadata.
 
----
+## Requirements
 
-## ✅ المتطلبات
+- Docker Desktop, or Docker Engine with Docker Compose v2.20 or later.
+- An API key for an OpenAI-compatible provider (such as OpenAI, Gemini, Anthropic, Groq, or OpenRouter), or a locally running Ollama instance.
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (أو Docker Engine + Compose v2.20 فما فوق على Linux)
-- مفتاح API لأي مزوّد متوافق مع OpenAI (OpenAI، Gemini، Anthropic، Groq، OpenRouter) — أو [Ollama](https://ollama.com) محلياً بدون مفتاح.
+## Quick start
 
----
-
-## ⚡ التشغيل السريع
-
-### 1. تنزيل المشروع
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/3bdallah2004/AlphaSystem.git
 cd AlphaSystem
 ```
 
-### 2. إعداد ملف البيئة
+### 2. Configure the environment
 
 ```bash
-cp .env.example .env        # على Windows: copy .env.example .env
+cp .env.example .env
 ```
 
-افتح `.env` وضع مفتاحك في `LLM_API_KEY`، وغيّر `POSTGRES_PASSWORD` إلى كلمة مرور خاصة بك.
+On Windows, use `copy .env.example .env`. Set `LLM_API_KEY` and choose a private value for `POSTGRES_PASSWORD` in `.env`.
 
-### 3. التشغيل
+### 3. Start the application
 
-| النظام | الأمر |
+| Platform | Command |
 |---|---|
-| Windows | اضغط مرتين على `run_alpha.bat` |
+| Windows | Run `run_alpha.bat` |
 | macOS / Linux | `bash run_alpha.sh` |
-| أي نظام (يدوياً) | `docker compose up -d --build --wait --remove-orphans` |
+| Any platform | `docker compose up -d --build --wait --remove-orphans` |
 
-السكربتات تتحقق من Docker، وتنشئ `.env` إن لم يكن موجوداً، وتنتظر جاهزية كل الخدمات ثم تفتح المتصفح.
+The startup scripts check Docker, create `.env` from `.env.example` if needed, wait for the services to become healthy, and open the website.
 
-افتح الموقع: **http://localhost:8601**. التشغيل يزيل تلقائياً أي حاوية قديمة لم تعد ضمن إعدادات Compose، مع الحفاظ على بيانات SQLite وn8n.
+Open **http://localhost:8601**.
 
-### الإيقاف
+### Stop the application
 
 ```bash
-docker compose down        # يوقف الخدمات ويحافظ على البيانات
-docker compose down -v     # ⚠️ يحذف كل البيانات (القضايا وn8n وقاعدة البيانات)
+docker compose down       # Stop containers and preserve data
+docker compose down -v    # WARNING: also delete case and n8n data volumes
 ```
 
----
+## AI provider configuration
 
-## 🤖 اختيار مزوّد الذكاء الاصطناعي
+The workflow supports any OpenAI-compatible Chat Completions API. Configure providers in `.env`, then restart the services with `docker compose up -d`.
 
-يعمل سير العمل مع أي واجهة **Chat Completions متوافقة مع OpenAI**. عدّل هذه القيم في `.env` ثم أعد التشغيل (`docker compose up -d`):
-
-| المزوّد | `LLM_BASE_URL` | مثال `LLM_MODEL` |
+| Provider | `LLM_BASE_URL` | Example `LLM_MODEL` |
 |---|---|---|
-| OpenAI (افتراضي) | `https://api.openai.com/v1` | `gpt-4.1-mini` |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4.1-mini` |
 | Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | `gemini-2.5-flash` |
 | Anthropic | `https://api.anthropic.com/v1` | `claude-sonnet-5-5` |
 | Groq | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` |
 | OpenRouter | `https://openrouter.ai/api/v1` | `openai/gpt-4.1-mini` |
-| Ollama (محلي) | `http://host.docker.internal:11434/v1` | `llama3.1` |
+| Ollama | `http://host.docker.internal:11434/v1` | `llama3.1` |
 
-> مع Ollama ضع أي نص في `LLM_API_KEY` (لا يُستخدم).
+For Ollama, `LLM_API_KEY` can contain any value; Ollama does not use it.
 
----
+## Environment variables
 
-## ⚙️ متغيرات البيئة
-
-| المتغير | الوصف | الافتراضي |
+| Variable | Description | Default |
 |---|---|---|
-| `LLM_API_KEY` | مفتاح مزوّد النموذج (**مطلوب للتحليل**) | — |
-| `LLM_BASE_URL` | رابط واجهة المزوّد | `https://api.openai.com/v1` |
-| `LLM_MODEL` | اسم النموذج | `gpt-4.1-mini` |
-| `LLM_PROVIDERS` + `LLM_<n>_URL` / `_KEY` / `_MODEL` / `_VISION_MODEL` | عدة مزوّدين يُجرَّبون بالترتيب عند نفاد حصة أحدهم (تتقدّم على الأسماء أعلاه) | — |
-| `BACKUP_LLM_BASE_URL` / `BACKUP_LLM_API_KEY` / `BACKUP_LLM_MODEL` | مزوّد ثانٍ بالأسماء القديمة (مثل `LLM_2_*`) | — |
-| `ALPHA_WEBHOOK_TOKEN` | سرّ مشترك بين الواجهة وn8n؛ أي طلب بدونه يُرفض (يُنشئه `run_alpha` تلقائياً) | فارغ = بلا حماية |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | بيانات قاعدة n8n | `n8n` / — / `n8n` |
-| `TIMEZONE` | المنطقة الزمنية لـ n8n | `UTC` |
-| `WEB_PORT` / `N8N_PORT` | منافذ الموقع وn8n على جهازك | `8601` / `5678` |
-| `ALPHA_REQUEST_TIMEOUT` | مهلة انتظار التحليل بالثواني (ينتظر n8n أقل منها بـ 10 ثوانٍ) | `120` |
-| `VISION_MODEL` | نموذج قراءة الصور والفيديو المرفقة | `nvidia/nemotron-3.5-super-vl:free` |
-| `VISION_BASE_URL` / `VISION_API_KEY` | مزوّد نموذج الرؤية (افتراضياً نفس مزوّد التحليل) | — |
-| `ALPHA_VISION_ENABLED` | `0` لإبقاء المرفقات خارج التحليل | `1` |
-| `ALPHA_VISION_MAX_TOKENS` | ميزانية رد نموذج الصور (تُستخدم أيضاً للتفكير الداخلي) | `1200` |
-| `ALPHA_VISION_RETRY_MAX_TOKENS` | الميزانية عند إعادة المحاولة إن استهلك النموذج كل الأولى في التفكير | `3000` |
-| `ALPHA_GEOCODE_ENABLED` | `0` لإيقاف تحديد الموقع التلقائي على الخريطة | `1` |
-| `ALPHA_GEOCODE_URL` | خدمة تحويل أسماء الأماكن إلى إحداثيات | Nominatim من OpenStreetMap |
-| `ALPHA_GEOCODE_BOUNDS` | منطقة الترجيح بصيغة `شمال,غرب;جنوب,شرق` (فارغة = بلا ترجيح) | `33.4,34.2;31.2,35.9` |
-| `ALPHA_MAX_ATTACHMENT_MB` | أقصى حجم للملف المرفق | `200` |
-| `ALPHA_ATTACHMENTS_DIR` | مجلد تخزين المرفقات (بدون Docker فقط) | بجانب قاعدة البيانات |
-| `ALPHA_WEBHOOK_URL` | رابط سير العمل (للتشغيل بدون Docker فقط) | `http://localhost:5678/webhook/alpha-analyze` |
-| `ALPHA_DB_PATH` | مسار قاعدة القضايا (للتشغيل بدون Docker فقط) | `data/alpha_database.db` |
+| `LLM_API_KEY` | Provider API key; required for AI analysis | — |
+| `LLM_BASE_URL` | Provider API base URL | `https://api.openai.com/v1` |
+| `LLM_MODEL` | Text analysis model | `gpt-4.1-mini` |
+| `LLM_PROVIDERS` and `LLM_<n>_URL` / `_KEY` / `_MODEL` / `_VISION_MODEL` | Configure multiple providers in priority order | — |
+| `BACKUP_LLM_BASE_URL` / `BACKUP_LLM_API_KEY` / `BACKUP_LLM_MODEL` | Configure a second provider using the legacy variable names | — |
+| `ALPHA_WEBHOOK_TOKEN` | Shared secret required by the app and n8n; startup scripts generate one if missing | Empty means no webhook authentication |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | n8n database credentials | `n8n` / required / `n8n` |
+| `TIMEZONE` | Time zone used by n8n | `UTC` |
+| `WEB_PORT` / `N8N_PORT` | Host ports for the website and n8n | `8601` / `5678` |
+| `ALPHA_REQUEST_TIMEOUT` | Analysis request timeout in seconds | `120` |
+| `VISION_MODEL` | Model used to inspect image and video attachments | `nvidia/nemotron-3.5-super-vl:free` |
+| `VISION_BASE_URL` / `VISION_API_KEY` | Vision provider; defaults to the text provider | — |
+| `ALPHA_VISION_ENABLED` | Set to `0` to disable attachment vision analysis | `1` |
+| `ALPHA_VISION_MAX_TOKENS` | Initial vision response token budget | `1200` |
+| `ALPHA_VISION_RETRY_MAX_TOKENS` | Token budget for a vision retry | `3000` |
+| `ALPHA_GEOCODE_ENABLED` | Set to `0` to disable automatic location lookup | `1` |
+| `ALPHA_GEOCODE_URL` | Place-name geocoding service | OpenStreetMap Nominatim |
+| `ALPHA_GEOCODE_BOUNDS` | Preferred bounds in `north,west;south,east` format | `33.4,34.2;31.2,35.9` |
+| `ALPHA_MAX_ATTACHMENT_MB` | Maximum size of each attachment | `200` |
+| `ALPHA_ATTACHMENTS_DIR` | Attachment storage directory (without Docker) | Next to the database |
+| `ALPHA_WEBHOOK_URL` | n8n workflow URL (without Docker) | `http://localhost:5678/webhook/alpha-analyze` |
+| `ALPHA_DB_PATH` | SQLite database path (without Docker) | `data/alpha_database.db` |
 
-> الخدمات متاحة من جهازك فقط (`127.0.0.1`) وليست مكشوفة على الشبكة.
+By default, the website and n8n ports are bound to `127.0.0.1` and are not exposed to the local network.
 
----
+## Local development
 
-## 🛠️ التطوير المحلي
+For live-reload development, start n8n first:
 
-لتشغيل الـ API والواجهة الجديدة مع إعادة تحميل فورية (PowerShell):
-
-```bash
+```powershell
 docker compose up -d --wait n8n
 python -m venv .venv
-.venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
+.venv\Scripts\activate
 pip install -r requirements.txt
 $env:ALPHA_WORKER = "api"
 uvicorn api.main:app --reload --port 8000
 ```
 
-وفي نافذة طرفية ثانية:
+In a second terminal:
 
 ```bash
 cd web
@@ -142,156 +128,81 @@ npm ci
 npm run dev
 ```
 
-تتوفر واجهة التطوير على `http://localhost:5173`، وتُمرَّر طلبات `/api` إلى FastAPI على `8000`.
+The Vite development server runs at `http://localhost:5173` and proxies `/api` requests to FastAPI on port `8000`.
 
----
+## Case conversations
 
-## 💬 محادثة القضية
+After analysis, each case has a report and a conversation. Users can ask questions about the case, add information, and attach files to messages. Responses use the original report, the latest analysis, and up to the last 20 conversation messages.
 
-بعد اكتمال التحليل، لصفحة القضية تبويبان: **التقرير** و**المحادثة**. في المحادثة يمكنك:
+- Replies are generated in the background so users can continue working.
+- Failed replies can be retried without losing the original question.
+- A reply can be added to the case report while preserving previous report versions.
+- Clearing a conversation removes its messages and message attachments without deleting case attachments.
+- Pending replies are marked as failed after a service restart and can be retried.
 
-- **السؤال** عن أي شيء في القضية («لماذا صنّفت الخطورة مرتفعة؟»، «ما الخطوة التالية؟»).
-- **إضافة معلومة جديدة** («الشاهد الجديد قال إن السيارة كانت بلا لوحة أمامية»).
-- **إرفاق ملف أو صورة أو فيديو مع رسالتك** — يُقرأ بنفس طريقة مرفقات القضية (نص المستندات، ووصف الصور وإطارات الفيديو بنموذج الرؤية)، وينضم محتواه إلى السؤال.
+## Attachments and multimodal analysis
 
-تُعالج جميع الصور ومرفقات الصور المقبولة دون سقف إجمالي، ويُحلّل من كل فيديو حتى أربعة إطارات موزعة على مدته. تُستخرج النصوص من المستندات المدعومة، ويُطلب تفريغ الصوت من مزوّد يدعم واجهة `/audio/transcriptions`. إذا تعذرت قراءة صيغة أو رفضها المزوّد، يُذكر اسم المرفق وسبب التعذر ضمن معلومات التحليل بدلاً من إسقاطه بصمت.
+Cases support images, video, audio, PDF, Word documents, and text files, subject to `ALPHA_MAX_ATTACHMENT_MB` (200 MB by default per file). Attachments are stored under `data/attachments/<case-id>/` in the same Docker volume as the case database and are removed when the case is deleted.
 
-كل رد يُبنى على: نص البلاغ + التحليل السابق + **آخر 20 رسالة** من المحادثة. فالردود تتراكم معرفتها ولا تبدأ من الصفر.
-
-| السلوك | التفصيل |
+| File type | Processing |
 |---|---|
-| الكتابة في الخلفية | يُحفظ سؤالك فوراً ويُكتب الرد في الخلفية، فتستطيع متابعة العمل. |
-| الفشل | إذا تعذّر الرد تظهر رسالة وزر **«إعادة المحاولة»**، ولا يُفقد سؤالك. |
-| تحديث التقرير | من رد Alpha اضغط **«تحديث التقرير»** لحفظه كتقرير القضية. الرد النصي يُضاف كقسم «تحديث من المحادثة» إلى التقرير المنظم، فتبقى الأدلة والأطراف والخطورة كما هي. تُحفظ النسخ السابقة مرتبة في تبويب **«التقرير»**؛ اختر النسخة الأولى أو الثانية لعرضها دون تغيير التقرير الحالي. |
-| مسح المحادثة | يمسح الرسائل والمرفقات التي جاءت معها فقط، و**يبقي مرفقات القضية**. |
-| إعادة تشغيل التطبيق | أي رد كان قيد الكتابة يُعلَّم فاشلاً ويمكن إعادة المحاولة. |
-| المسودات | لا تظهر المحادثة لقضية لم تُحلَّل بعد، بل تلميح لتحليلها أولاً. |
+| Text, CSV, JSON, HTML, SVG | Read as text |
+| PDF | Text extracted with `pypdf` |
+| Word (`.docx`) | Text extracted with `python-docx` |
+| Images | Described by the configured vision model |
+| Video | Up to four frames are extracted with `ffmpeg` and analyzed by the vision model |
+| Audio | Transcribed through a provider that supports `/audio/transcriptions` |
 
----
+Vision descriptions and audio transcriptions are cached to avoid repeating work during re-analysis. Unreadable or unsupported attachments are reported rather than silently ignored. Set `ALPHA_VISION_ENABLED=0` to exclude attachments from vision analysis.
 
-## 📎 المرفقات والتحليل متعدد الوسائط
+## Maps and locations
 
-كل قضية تقبل مرفقات: صور، فيديو، صوت، PDF، مستندات Word وملفات نصية (حتى `ALPHA_MAX_ATTACHMENT_MB`، افتراضياً 200 ميغابايت للملف).
+- Case locations can be geocoded automatically from a place name using OpenStreetMap Nominatim, or selected manually on the map.
+- The map displays case locations in case details and in the filtered case register.
+- A click on the map replaces the automatically selected pin; users can also remove the pin.
+- By default, geocoding prefers the West Bank region using `ALPHA_GEOCODE_BOUNDS`.
+- Only the place name is sent to Nominatim; case report text and other case details are not sent.
+- Map tiles are loaded from public OpenStreetMap servers. For sensitive deployments, consider hosting your own tile server.
 
-تُحفظ الملفات في `data/attachments/<رقم القضية>/` داخل نفس الـ volume، وتُحذف تلقائياً عند حذف القضية.
+## Editing the n8n workflow
 
-**كيف تدخل المرفقات في التحليل:**
+1. Open **http://localhost:5678** and create the owner account on first launch.
+2. Edit the **Alpha - Case Analysis** workflow and publish your changes.
+3. Download the updated workflow and replace `n8n/workflows/alpha-analysis.json` in the repository.
 
-| النوع | ما يحدث |
-|---|---|
-| نص، CSV، JSON، HTML، SVG | يُقرأ نصّاً مباشرة |
-| PDF | يُستخرج نصّه (`pypdf`) |
-| Word (`.docx`) | يُستخرج نصّه (`python-docx`) |
-| صور | يصفها **نموذج الرؤية** وصفاً وقائعياً |
-| فيديو | تُستخرج 4 إطارات موزّعة (`ffmpeg`) ويصفها نموذج الرؤية |
+The repository workflow is imported at startup, so save workflow changes in the repository to keep them across restarts.
 
-نموذج التحليل (`LLM_MODEL`) نصّي عادةً، لذلك لا تُرسل إليه الصور مباشرة: يصفها نموذج الرؤية أولاً، وينضم الوصف إلى نص البلاغ قبل التحليل. اضبطه في `.env`:
-
-| المتغير | الوصف | الافتراضي |
-|---|---|---|
-| `VISION_MODEL` | نموذج قراءة الصور والفيديو | `nvidia/nemotron-3.5-super-vl:free` |
-| `VISION_BASE_URL` | رابط مزوّد نموذج الرؤية | نفس `LLM_BASE_URL` |
-| `VISION_API_KEY` | مفتاحه | نفس `LLM_API_KEY` |
-| `ALPHA_VISION_ENABLED` | `0` لإبقاء المرفقات خارج التحليل | `1` |
-| `ALPHA_VISION_MAX_TOKENS` | ميزانية رد نموذج الصور | `1200` |
-| `ALPHA_VISION_RETRY_MAX_TOKENS` | ميزانية المحاولة الثانية عند نفاد الأولى في التفكير | `3000` |
-
-- في صفحة القضية، زر **«اعرض ما سيقرأه التحليل»** يعرض النص النهائي الذي سيصل للنموذج، فتتأكد أن المرفقات قُرئت فعلاً.
-- إذا استهلك نموذج الصور ميزانية الرد كاملة في التفكير الداخلي وأعاد نصاً فارغاً (`finish_reason: length`)، يعيد النظام المحاولة تلقائياً بميزانية أكبر بدل الإبلاغ بأن الصورة غير مقروءة.
-- الأوصاف وتفريغ الصوت (الملفات الصوتية وصوت الفيديو) تُخزَّن مؤقتاً، فلا يُعاد وصف الصورة ولا تفريغ الصوت عند كل إعادة تحليل (توفير يصل لدقائق).
-- ⚠️ النموذج المجاني `nemotron-3.5-super-vl:free` قد يستغرق حتى دقيقة للصورة الواحدة. للسرعة استخدم `google/gemini-2.5-flash` (مدفوع، ثوانٍ).
-- الملفات غير المقروءة (مثل PDF ممسوح ضوئياً بلا نص) تُذكر صراحة في التقرير، ولا تُتجاهل بصمت.
-
----
-
-## 🗺️ الخرائط والمواقع
-
-- **يُحدَّد الموقع تلقائياً من البلاغ**: اسم المكان الذي يستخرجه التحليل (أو تكتبه أنت في حقل الموقع) يُحوَّل إلى
-  إحداثيات عبر Nominatim من OpenStreetMap، فيظهر الدبوس في الخطوة الثانية وفي صفحة القضية وعلى الخريطة العامة.
-- يبقى بيدك التحكم: أي نقرة على الخريطة تستبدل الدبوس التلقائي، وزر «إزالة الدبوس» يحذفه.
-- الأسماء العامة مثل «عبر الإنترنت» أو «عدة مدن» لا تُحوَّل، وتظهر رسالة توضح ذلك بدل وضع دبوس في مكان عشوائي.
-- البحث مُرجَّح لمنطقة الضفة الغربية افتراضياً (إعداد `ALPHA_GEOCODE_BOUNDS`)، وإلا فكلمة مثل «Jenin» قد تُطابق
-  قرية في بولندا. الترجيح لا يمنع نتيجة خارج المنطقة، فقط يقدّم الأقرب.
-- القضايا القديمة التي بلا إحداثيات تُثبَّت على الخريطة تلقائياً في الخلفية عند فتح قائمة القضايا، ثلاث قضايا
-  في كل زيارة، فلا تنتظر الصفحة خدمة الخرائط. كل مكان يُسأل عنه مرة واحدة فقط في كل تشغيل، حتى لو لم يُعثر عليه.
-- 🔒 **الخصوصية**: يُرسل **اسم المكان وحده** إلى Nominatim، لا يُرسل نص البلاغ ولا أي بيانات قضية أخرى.
-  لتشغيل هذا محلياً أو إيقافه: `ALPHA_GEOCODE_ENABLED=0` (أو غيّر `ALPHA_GEOCODE_URL` لخادمك).
-- في الخطوة الثانية لإضافة القضية يمكنك أيضاً النقر على الخريطة يدوياً لتحديد مكان الحادثة (تُحفظ الإحداثيات مع القضية).
-- تظهر الخريطة في صفحة القضية، وتعرض صفحة «كل القضايا» خريطة لجميع القضايا المحددة وفق الفلاتر المختارة.
-- الخرائط من **OpenStreetMap** بدون أي مفتاح API، وتغطيتها للضفة الغربية جيدة وبأسماء عربية.
-- ⚠️ صور الخريطة تُحمَّل من خوادم OpenStreetMap العامة في متصفح المستخدم، فهي ترى المناطق المعروضة. للاستخدام الفعلي مع بيانات حساسة، استضف خادم خرائط خاصاً بك.
-
----
-
-## 🔧 تعديل سير عمل n8n
-
-1. افتح **http://localhost:5678** وأنشئ حساب المالك في أول زيارة.
-2. عدّل سير العمل **Alpha - Case Analysis** (مثلاً نص التعليمات في عقدة *Call LLM*) ثم انشره (Publish).
-3. لحفظ التعديلات في المستودع: من القائمة ⋯ اختر **Download**، واستبدل بالملف الناتج `n8n/workflows/alpha-analysis.json`.
-
-> ⚠️ عند كل تشغيل تُستورد النسخة الموجودة في المستودع وتستبدل نسخة n8n، لذا احفظ تعديلاتك في الملف كما في الخطوة 3.
-
----
-
-## 📂 هيكلية المشروع
+## Project structure
 
 ```text
 AlphaSystem/
-├── app/
-│   ├── analysis.py        # الاتصال بسير عمل n8n
-│   ├── db.py              # قاعدة بيانات القضايا (SQLite)
-│   ├── config.py          # قراءة الإعدادات من البيئة / .env
-│   ├── attachments.py     # تخزين مرفقات القضايا
-│   ├── chat.py            # محادثة القضية (الرسائل والسياق)
-│   ├── extract.py         # استخراج النص من المستندات وإطارات الفيديو
-│   ├── vision.py          # وصف الصور بنموذج الرؤية
-├── api/                   # واجهة FastAPI المستخدمة من React
-├── web/                   # موقع React
-├── n8n/workflows/
-│   └── alpha-analysis.json  # سير عمل التحليل والمحادثة (يُستورد تلقائياً)
-├── Dockerfile.api         # صورة FastAPI
-├── docker-compose.yml     # postgres + n8n + api + web
-├── requirements.txt       # حزم Python بإصدارات ثابتة
-├── .env.example           # قالب الإعدادات (انسخه إلى .env)
-├── run_alpha.bat          # تشغيل بضغطة على Windows
-└── run_alpha.sh           # تشغيل على macOS / Linux
+├── app/                       # Shared analysis, database, chat, and attachment modules
+├── api/                       # FastAPI backend used by React
+├── web/                       # React website
+├── n8n/workflows/             # Analysis and conversation workflow
+├── Dockerfile.api             # FastAPI container image
+├── docker-compose.yml         # PostgreSQL, n8n, API, and website services
+├── requirements.txt           # Python dependencies
+├── .env.example               # Environment template
+├── run_alpha.bat              # Windows startup script
+└── run_alpha.sh               # macOS / Linux startup script
 ```
 
----
+## Troubleshooting
 
-## 🩺 حل المشكلات
-
-| المشكلة | الحل |
+| Problem | Suggested action |
 |---|---|
-| «سير عمل التحليل غير مستورد أو غير مفعّل» | شغّل `docker compose up -d` مجدداً، وراجع `docker compose logs n8n-import`. |
-| رد المحادثة لا يستفيد من الصورة المرفقة | تأكد أن `VISION_MODEL` و `VISION_API_KEY` مضبوطان، ثم جرّب زر «اعرض ما سيقرأه التحليل» في صفحة القضية. |
-| ردود المحادثة بطيئة | كل صورة تُوصف مرة واحدة وتُخزَّن؛ الاستعلامات النصية وحدها لا تستدعي نموذج الرؤية. |
-| `LLM request failed: ... 401` | المفتاح في `LLM_API_KEY` غير صحيح، أو لا يناسب `LLM_BASE_URL`. |
-| «لا يوجد أي مزوّد ذكاء اصطناعي مضبوط» | ضع `LLM_API_KEY` (أو `LLM_1_KEY`) في `.env` ثم نفّذ `docker compose up -d`. |
-| «رفض سير العمل الطلب: ALPHA_WEBHOOK_TOKEN…» | القيمة تغيّرت في `.env` دون إعادة إنشاء الخدمات؛ نفّذ `docker compose up -d`. |
-| `LLM request failed: ... 404` | اسم النموذج في `LLM_MODEL` غير متاح لدى المزوّد. |
-| `Set POSTGRES_PASSWORD in .env` | لم يُنشأ ملف `.env` — انسخه من `.env.example`. |
-| المنفذ 8601 أو 5678 مستخدم | غيّر `WEB_PORT` أو `N8N_PORT` في `.env`. |
-| تغيّرت قيم `.env` ولم يتغير شيء | نفّذ `docker compose up -d` لإعادة إنشاء الخدمات بالقيم الجديدة. |
+| Workflow is missing or inactive | Run `docker compose up -d` and check `docker compose logs n8n-import`. |
+| No AI provider is configured | Set `LLM_API_KEY` or `LLM_1_KEY` in `.env`, then restart the services. |
+| Invalid provider credentials (`401`) | Check that the API key matches the configured `LLM_BASE_URL`. |
+| Model not found (`404`) | Check that `LLM_MODEL` is available from the selected provider. |
+| Webhook token is rejected | Ensure `ALPHA_WEBHOOK_TOKEN` matches for the API and n8n, then run `docker compose up -d`. |
+| PostgreSQL password is missing | Create `.env` from `.env.example` and set `POSTGRES_PASSWORD`. |
+| Port `8601` or `5678` is in use | Change `WEB_PORT` or `N8N_PORT` in `.env`. |
+| Environment changes are not applied | Recreate services with `docker compose up -d`. |
 
-لعرض السجلات: `docker compose logs -f web api n8n`
+View service logs with `docker compose logs -f web api n8n`.
 
----
+## Developer
 
-## ⬆️ الترقية من النسخة السابقة
-
-النسخة السابقة كانت تستخدم سير عمل n8n محفوظاً محلياً فقط، وقاعدة القضايا في `alpha_database.db` بجانب `app.py`.
-
-- **القضايا**: عند التشغيل بدون Docker يستمر استخدام `alpha_database.db` القديم تلقائياً إن وُجد. لنقله إلى Docker:
-  ```bash
-  docker compose cp alpha_database.db api:/data/alpha_database.db
-  docker compose exec -u root api chown alpha:alpha /data/alpha_database.db
-  docker compose restart api
-  ```
-- **سير العمل القديم**: صدّره من n8n القديم قبل الترقية إن أردت الاحتفاظ به. النسخة الجديدة تستخدم volumes وأسماء حاويات جديدة (`alpha-*`)، فلا تتعارض مع القديمة، ويمكنك حذف القديمة بعد التأكد: `docker rm alpha_postgres alpha_n8n`.
-
----
-
-## 👤 المطور
-
-عبد الله الحاج علي — [@3bdallah2004](https://github.com/3bdallah2004)
+Abdullah Haj Ali — [@3bdallah2004](https://github.com/3bdallah2004)
