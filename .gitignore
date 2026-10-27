@@ -24,6 +24,11 @@ n8n_data/
 # Tooling
 .playwright-mcp/
 .pytest_cache/
+web/node_modules/
+web/dist/
+web/coverage/
+demo-video/build/
+*.tsbuildinfo
 
 # OS & IDE files
 .DS_Store

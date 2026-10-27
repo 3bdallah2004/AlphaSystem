@@ -13,10 +13,12 @@ from pathlib import Path
 import db
 from config import ATTACHMENTS_DIR, MAX_ATTACHMENT_MB
 
-IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg"}
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
 VIDEO_EXT = {".mp4", ".webm", ".mov", ".m4v", ".ogv", ".avi", ".mkv"}
 AUDIO_EXT = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".opus"}
-TEXT_EXT = {".txt", ".md", ".csv", ".log", ".json", ".xml", ".html", ".htm", ".yaml", ".yml"}
+# SVG is XML text: vision models and Pillow cannot read it as a picture, but its text (labels,
+# titles) is readable, so it is treated as a text document.
+TEXT_EXT = {".txt", ".md", ".csv", ".log", ".json", ".xml", ".html", ".htm", ".yaml", ".yml", ".svg"}
 PDF_EXT = {".pdf"}
 
 # What the uploader offers: everything the UI knows how to preview, plus archives and Office files.

@@ -2,24 +2,34 @@ name: alpha
 
 # The model providers. Both n8n (which runs the analysis) and the app (which reads images)
 # read these. Compose cannot enumerate variables, so a new provider needs a line here too:
-# add LLM_4_* to .env, then copy its three lines below.
+# add LLM_4_* to .env, then copy its lines below.
+# Provider 1 falls back to the simple LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / VISION_MODEL
+# names from .env.example, and provider 2 to the BACKUP_LLM_* names, so either layout works.
 x-llm-env: &llm-env
   LLM_PROVIDERS: ${LLM_PROVIDERS:-}
   LLM_1_LABEL: ${LLM_1_LABEL:-}
-  LLM_1_URL: ${LLM_1_URL:-}
-  LLM_1_KEY: ${LLM_1_KEY:-}
-  LLM_1_MODEL: ${LLM_1_MODEL:-}
-  LLM_1_VISION_MODEL: ${LLM_1_VISION_MODEL:-}
+  LLM_1_URL: ${LLM_1_URL:-${LLM_BASE_URL:-}}
+  LLM_1_KEY: ${LLM_1_KEY:-${LLM_API_KEY:-}}
+  LLM_1_MODEL: ${LLM_1_MODEL:-${LLM_MODEL:-}}
+  LLM_1_VISION_MODEL: ${LLM_1_VISION_MODEL:-${VISION_MODEL:-}}
   LLM_2_LABEL: ${LLM_2_LABEL:-}
-  LLM_2_URL: ${LLM_2_URL:-}
-  LLM_2_KEY: ${LLM_2_KEY:-}
-  LLM_2_MODEL: ${LLM_2_MODEL:-}
-  LLM_2_VISION_MODEL: ${LLM_2_VISION_MODEL:-}
+  LLM_2_URL: ${LLM_2_URL:-${BACKUP_LLM_BASE_URL:-}}
+  LLM_2_KEY: ${LLM_2_KEY:-${BACKUP_LLM_API_KEY:-}}
+  LLM_2_MODEL: ${LLM_2_MODEL:-${BACKUP_LLM_MODEL:-}}
+  LLM_2_VISION_MODEL: ${LLM_2_VISION_MODEL:-${BACKUP_VISION_MODEL:-}}
   LLM_3_LABEL: ${LLM_3_LABEL:-}
   LLM_3_URL: ${LLM_3_URL:-}
   LLM_3_KEY: ${LLM_3_KEY:-}
   LLM_3_MODEL: ${LLM_3_MODEL:-}
   LLM_3_VISION_MODEL: ${LLM_3_VISION_MODEL:-}
+  # An optional provider used only for reading images (defaults to provider 1).
+  VISION_BASE_URL: ${VISION_BASE_URL:-}
+  VISION_API_KEY: ${VISION_API_KEY:-}
+  VISION_MODEL: ${VISION_MODEL:-}
+  # Shared secret between the app and the workflow; run_alpha.* generates one in .env.
+  ALPHA_WEBHOOK_TOKEN: ${ALPHA_WEBHOOK_TOKEN:-}
+  # The workflow waits a little less than the app, so the app sees the workflow's own error.
+  ALPHA_REQUEST_TIMEOUT: ${ALPHA_REQUEST_TIMEOUT:-120}
   ALPHA_VISION_ENABLED: ${ALPHA_VISION_ENABLED:-1}
   ALPHA_VISION_MAX_TOKENS: ${ALPHA_VISION_MAX_TOKENS:-1200}
   ALPHA_VISION_RETRY_MAX_TOKENS: ${ALPHA_VISION_RETRY_MAX_TOKENS:-3000}
@@ -92,28 +102,38 @@ services:
       n8n-import:
         condition: service_completed_successfully
 
-  app:
-    build: .
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
     restart: unless-stopped
     environment:
+      ALPHA_WORKER: api
       ALPHA_WEBHOOK_URL: http://n8n:5678/webhook/alpha-analyze
       ALPHA_DB_PATH: /data/alpha_database.db
       ALPHA_ATTACHMENTS_DIR: /data/attachments
       ALPHA_MAX_ATTACHMENT_MB: ${ALPHA_MAX_ATTACHMENT_MB:-200}
-      ALPHA_REQUEST_TIMEOUT: ${ALPHA_REQUEST_TIMEOUT:-120}
-      # The location name of a case becomes a map pin; only the name leaves the server.
       ALPHA_GEOCODE_ENABLED: ${ALPHA_GEOCODE_ENABLED:-1}
       ALPHA_GEOCODE_BOUNDS: ${ALPHA_GEOCODE_BOUNDS:-33.4,34.2;31.2,35.9}
-      # Attachments are read before analysis: a vision model describes images and video frames
-      # for the (usually text-only) analysis model. Providers come from the shared block above.
       <<: *llm-env
       ALPHA_AUDIO_TRANSCRIPTION_MODEL: ${ALPHA_AUDIO_TRANSCRIPTION_MODEL:-whisper-1}
-    ports:
-      - "127.0.0.1:${APP_PORT:-8501}:8501"
+    expose:
+      - "8000"
     volumes:
       - app_data:/data
     depends_on:
       n8n:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8601}:80"
+    depends_on:
+      api:
         condition: service_healthy
 
 volumes:

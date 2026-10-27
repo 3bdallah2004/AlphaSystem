@@ -182,6 +182,51 @@ def test_describe_transcribes_audio_and_reports_provider_errors(database, case, 
     assert "recording.wav" in text and "provider rejected format" in text
 
 
+def test_video_sound_is_transcribed_once_and_cached(database, case, monkeypatch):
+    _add(database, case, "clip.mp4", b"video", "video/mp4")
+    calls = []
+    monkeypatch.setattr(extract, "video_frames", lambda row: ["frame-1"])
+    monkeypatch.setattr(extract, "_video_audio", lambda row: b"sound")
+    monkeypatch.setattr(extract, "transcribe_audio",
+                        lambda data, filename: (calls.append(filename) or "كلام في الفيديو", None))
+    for _ in range(3):
+        text, _ = extract.describe("ar", database.list_attachments(case))
+        assert "كلام في الفيديو" in text
+    assert calls == ["clip.mp3"]
+
+
+def test_audio_file_is_transcribed_once_and_cached(database, case, monkeypatch):
+    _add(database, case, "call.wav", b"audio", "audio/wav")
+    calls = []
+    monkeypatch.setattr(extract, "transcribe_audio",
+                        lambda data, filename: (calls.append(filename) or "مكالمة", None))
+    for _ in range(2):
+        text, _ = extract.describe("ar", database.list_attachments(case))
+        assert "مكالمة" in text
+    assert calls == ["call.wav"]
+
+
+def test_svg_is_read_as_text_not_sent_to_vision(database, case):
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg"><text>Plate 12-345</text></svg>'
+    row = _add(database, case, "plate.svg", svg, "image/svg+xml")
+    assert row["kind"] == "text"
+    text, images = extract.describe("ar", [row])
+    assert "Plate 12-345" in text and images == []
+    # An SVG saved as an image by an older version is read as text too.
+    text, images = extract.describe("ar", [dict(row, kind="image")])
+    assert "Plate 12-345" in text and images == []
+
+
+def test_damaged_office_archive_is_reported_not_raised(database, case, monkeypatch):
+    row = _add(database, case, "sheet.xlsx", b"PK\x03\x04broken", "application/octet-stream")
+
+    def explode(*a, **kw):
+        raise NotImplementedError("compression type 99")
+
+    monkeypatch.setattr(extract.zipfile, "ZipFile", explode)
+    assert extract.text_of(row) is None
+
+
 def test_transcribe_audio_uses_configured_openai_compatible_endpoint(monkeypatch):
     class Response:
         ok = True

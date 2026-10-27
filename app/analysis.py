@@ -1,18 +1,24 @@
 """Client for the n8n analysis workflow (n8n/workflows/alpha-analysis.json)."""
 import json
+import logging
 import re
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
-import config
 import db
 import extract
 import geocode
 import llm
 import vision
-from config import REQUEST_TIMEOUT, WEBHOOK_URL
+from config import ALPHA_WORKER, REQUEST_TIMEOUT, WEBHOOK_TOKEN, WEBHOOK_URL
 from i18n import CASE_TYPES, case_type_label, t
+
+log = logging.getLogger(__name__)
+_analysis_lock = threading.Lock()
+_analysis_generations = {}
 
 OUTPUT_KEYS = ["output", "المخرجات", "report", "result", "response", "text", "message"]
 CODE_FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*(.*?)\s*```$", re.S)
@@ -21,6 +27,20 @@ SEVERITY_WORDS = {
     "medium": ("متوسط", "medium", "moderate"),
     "low": ("منخفض", "low"),
 }
+# A level word right after one of these ("not high", "غير مرتفعة") does not name the level.
+NEGATIONS = {"not", "non", "no", "غير", "ليس", "ليست", "لا"}
+_ARABIC_LETTER = "\u0600-\u06FF"
+
+
+def _level_pattern(word):
+    if word.isascii():
+        return re.compile(rf"\b{re.escape(word)}")
+    # Arabic: a whole word, allowing the article and "و" in front ("العالية", "ومرتفعة").
+    return re.compile(rf"(?<![{_ARABIC_LETTER}])(?:و?ال|و)?{re.escape(word)}")
+
+
+SEVERITY_PATTERNS = [(level, _level_pattern(word))
+                     for level, words in SEVERITY_WORDS.items() for word in words]
 
 
 def case_payload(case, language):
@@ -29,15 +49,21 @@ def case_payload(case, language):
     if current_report:
         if language == "en":
             case_text = (
-                f"Original report:\n{case_text}\n\n"
-                f"Latest saved report and analysis; treat it as the newest case information:\n"
-                f"{current_report}"
+                f"Updated original report (authoritative source):\n{case_text}\n\n"
+                f"Previous analysis (context only; re-evaluate it against the updated source):\n"
+                f"{current_report}\n\n"
+                "Generate a fresh report from the updated original report and all current "
+                "attachments. Incorporate new information, correct outdated conclusions, "
+                "and do not copy the previous analysis without re-evaluating it."
             ).strip()
         else:
             case_text = (
-                f"نص البلاغ الأصلي:\n{case_text}\n\n"
-                f"أحدث تقرير وتحليل محفوظ؛ اعتمده بوصفه أحدث معلومات القضية:\n"
-                f"{current_report}"
+                f"نص البلاغ الأصلي المحدّث (المصدر المعتمد):\n{case_text}\n\n"
+                f"التحليل السابق (للسياق فقط؛ أعد تقييمه وفق النص المحدّث):\n"
+                f"{current_report}\n\n"
+                "أنشئ تقريراً جديداً اعتماداً على نص البلاغ المحدّث وجميع المرفقات الحالية. "
+                "أدرج المعلومات الجديدة وصحّح الاستنتاجات القديمة، ولا تنسخ التحليل السابق "
+                "دون إعادة تقييمه."
             ).strip()
     return {
         "case_name": case["case_name"] or "", "case_text": case_text,
@@ -66,13 +92,26 @@ def find_key(report, *needles):
     return next((k for k in report if any(n in k.lower() for n in needles)), None)
 
 
+def severity_level(value):
+    """The level a severity text names: the first level word that is not negated, else None."""
+    text = str(value or "").lower()
+    hits = []
+    for level, pattern in SEVERITY_PATTERNS:
+        for match in pattern.finditer(text):
+            # Only the word right before counts: "not high" is negated, "non-critical; low" is low.
+            before = text[:match.start()].replace("-", "- ").split()[-1:]
+            if before and before[0].strip("-—–:،,.()") in NEGATIONS:
+                continue
+            hits.append((match.start(), level))
+    return min(hits)[1] if hits else None
+
+
 def extract_severity(report_text):
     report = parse_report(report_text)
     if not report:
         return None
     key = find_key(report, "خطورة", "severity")
-    value = str(report.get(key, "")).lower() if key else ""
-    return next((level for level, words in SEVERITY_WORDS.items() if any(w in value for w in words)), None)
+    return severity_level(report.get(key)) if key else None
 
 
 def report_as_text(report_text):
@@ -131,10 +170,15 @@ def _error_detail(response):
     return json.dumps(data, ensure_ascii=False)
 
 
+def _headers():
+    """The shared secret the workflow checks, when one is configured."""
+    return {"X-Alpha-Token": WEBHOOK_TOKEN} if WEBHOOK_TOKEN else {}
+
+
 def _post_workflow(payload, lang, timeout):
     """One attempt through n8n. Returns (ok, result_or_error, quota_spent)."""
     try:
-        r = requests.post(WEBHOOK_URL, json=payload, timeout=(10, timeout))
+        r = requests.post(WEBHOOK_URL, json=payload, headers=_headers(), timeout=(10, timeout))
     except requests.exceptions.ConnectionError:
         return False, t(lang, "err_connect", url=WEBHOOK_URL), False
     except requests.exceptions.Timeout:
@@ -146,6 +190,8 @@ def _post_workflow(payload, lang, timeout):
         return True, extract_output(r, lang), False
     if r.status_code == 404:
         return False, f"{t(lang, 'err_not_active')}\n{_error_detail(r)}", False
+    if r.status_code == 401:
+        return False, t(lang, "err_unauthorized"), False
     detail = _error_detail(r)
     if llm.looks_like_quota(r.status_code, detail):
         return False, detail, True
@@ -159,17 +205,30 @@ def send_to_n8n(payload, lang, timeout=REQUEST_TIMEOUT):
     Every provider being spent is survivable: each is retried after its cooldown, so they keep
     rotating and the user's request still succeeds.
     """
+    providers = llm.candidates("text")
+    if not providers:
+        # Nothing to send the request to: say so, instead of a quota error that never happened.
+        return False, t(lang, "err_no_provider")
     last_error = ""
-    for provider in llm.candidates("text"):
+    mode = payload.get("mode")
+    if mode not in {"analysis", "chat", "suggest"}:
+        mode = "analysis"
+    for provider in providers:
         # provider_key names the env vars the workflow should read (LLM_<key>_URL and so on).
         attempt = dict(payload, provider_key=provider["index"])
+        started = time.perf_counter()
         ok, result, spent = _post_workflow(attempt, lang, timeout)
         if ok or not spent:
+            log.info("AI timing mode=%s provider=%s outcome=%s elapsed_seconds=%.2f",
+                     mode, provider["index"], "success" if ok else "failed",
+                     time.perf_counter() - started)
             return ok, result
         # This provider is spent: set it aside and try the next one.
+        log.info("AI timing mode=%s provider=%s outcome=quota_retry elapsed_seconds=%.2f",
+                 mode, provider["index"], time.perf_counter() - started)
         llm.set_aside(provider["index"])
         last_error = result
-    return False, f"{t(lang, 'err_http', code=429)}\n{last_error}"
+    return False, f"{t(lang, 'err_quota_all')}\n{last_error}".strip()
 
 
 def suggest_details(case_text, lang):
@@ -198,6 +257,7 @@ def attachments_for_prompt(case_id, lang):
     rows = db.list_attachments(case_id)
     if not rows:
         return "", [], 0
+    started = time.perf_counter()
     cache = {r["id"]: r.get("description") for r in rows if r.get("description")}
     text, images = extract.describe(lang, rows, cache=cache)
     errors = []
@@ -207,24 +267,77 @@ def attachments_for_prompt(case_id, lang):
     if errors:
         text = "\n\n".join(part for part in (
             text, t(lang, "ex_skipped", names="; ".join(errors))) if part)
+    log.info("AI timing phase=analysis_attachments case_id=%s files=%d images=%d elapsed_seconds=%.2f",
+             case_id, len(rows), len(images), time.perf_counter() - started)
     return text, errors, len(images)
 
 
-def _run_analysis(inv_id, lang):
+def _is_current_analysis(inv_id, generation):
+    if generation is None:
+        return True
+    with _analysis_lock:
+        return _analysis_generations.get(inv_id) == generation
+
+
+def _run_analysis(inv_id, lang, generation=None):
+    """The background job. Whatever goes wrong, the case ends as analyzed or failed, never stuck."""
+    try:
+        _analyze(inv_id, lang, generation)
+    except Exception as exc:  # an unexpected error must not leave the case "analyzing" forever
+        log.exception("Analysis of case %s failed", inv_id)
+        try:
+            if _is_current_analysis(inv_id, generation) and db.get_case(inv_id):
+                db.update_case(inv_id, status="failed", error=t(lang, "err_unexpected", err=exc))
+        except Exception:
+            log.exception("Could not mark case %s as failed", inv_id)
+    finally:
+        if generation is not None:
+            with _analysis_lock:
+                if _analysis_generations.get(inv_id) == generation:
+                    del _analysis_generations[inv_id]
+
+
+def _analyze(inv_id, lang, generation=None):
+    started = time.perf_counter()
+    if not _is_current_analysis(inv_id, generation):
+        return
     case = db.get_case(inv_id)
     if not case:
         return
-    payload = case_payload(case, lang)
-    attachment_text, _, _ = attachments_for_prompt(inv_id, lang)
-    if attachment_text:
-        payload["case_text"] = f"{payload.get('case_text') or ''}\n\n{attachment_text}".strip()
-    ok, result = send_to_n8n(payload, lang)
+    geocode_pool = None
+    geocode_future = None
+    if case["latitude"] is None:
+        phase_started = time.perf_counter()
+        geocode_pool = ThreadPoolExecutor(max_workers=1)
+        geocode_future = geocode_pool.submit(locate, inv_id, lang)
+    try:
+        payload = case_payload(case, lang)
+        attachment_text, _, _ = attachments_for_prompt(inv_id, lang)
+        if attachment_text:
+            payload["case_text"] = f"{payload.get('case_text') or ''}\n\n{attachment_text}".strip()
+        ok, result = send_to_n8n(payload, lang)
+    finally:
+        if geocode_future:
+            try:
+                geocode_future.result()
+            finally:
+                geocode_pool.shutdown(wait=True)
+            log.info("AI timing phase=geocode case_id=%s elapsed_seconds=%.2f",
+                     inv_id, time.perf_counter() - phase_started)
     if not db.get_case(inv_id):  # deleted while it was being analyzed
+        log.info("AI timing mode=analysis case_id=%s outcome=deleted elapsed_seconds=%.2f",
+                 inv_id, time.perf_counter() - started)
+        return
+    if not _is_current_analysis(inv_id, generation):
+        log.info("AI timing mode=analysis case_id=%s outcome=superseded elapsed_seconds=%.2f",
+                 inv_id, time.perf_counter() - started)
         return
     if ok:
         db.save_analysis_report(inv_id, result, extract_severity(result))
     else:
         db.update_case(inv_id, status="failed", error=result)
+    log.info("AI timing mode=analysis case_id=%s outcome=%s elapsed_seconds=%.2f",
+             inv_id, "success" if ok else "failed", time.perf_counter() - started)
 
 
 def locate(inv_id, lang):
@@ -243,27 +356,63 @@ def locate(inv_id, lang):
     return True
 
 
-def start_analysis(inv_id, lang):
-    """Mark the case as analyzing and analyze it on a background thread, so the page stays usable.
+_locate_lock = threading.Lock()
+_locate_tried = set()       # cases already looked up in this run: a failed lookup is not repeated
+_locate_running = False
 
-    The map pin is found first, so the case appears on the map about when it is saved.
+
+def locate_missing(case_ids, lang, limit=3):
+    """Pin cases that have no coordinates, on a background thread so the page never waits.
+
+    Each case is looked up at most once per app run, and only `limit` per call, so a big register
+    does not flood the place-lookup service. Returns True when a lookup was started.
     """
-    case = db.get_case(inv_id)
-    if case and case["latitude"] is None:
-        locate(inv_id, lang)
-    db.update_case(inv_id, status="analyzing", error=None)
-    threading.Thread(target=_run_analysis, args=(inv_id, lang), daemon=True).start()
+    global _locate_running
+    with _locate_lock:
+        if _locate_running:
+            return False
+        pending = [case_id for case_id in case_ids if case_id not in _locate_tried][:limit]
+        if not pending:
+            return False
+        _locate_tried.update(pending)
+        _locate_running = True
+
+    def work():
+        global _locate_running
+        try:
+            for case_id in pending:
+                try:
+                    locate(case_id, lang)
+                except Exception:
+                    log.exception("Could not locate case %s", case_id)
+        finally:
+            with _locate_lock:
+                _locate_running = False
+
+    threading.Thread(target=work, daemon=True).start()
+    return True
+
+
+def start_analysis(inv_id, lang):
+    """Mark the case as analyzing and analyze it on a background thread, so the page stays usable."""
+    with _analysis_lock:
+        generation = _analysis_generations.get(inv_id, 0) + 1
+        _analysis_generations[inv_id] = generation
+    db.update_case(inv_id, status="analyzing", error=None, worker=ALPHA_WORKER)
+    threading.Thread(target=_run_analysis, args=(inv_id, lang, generation), daemon=True).start()
 
 
 def check_n8n(lang):
     """Ping the workflow itself (not just the n8n server). Returns (level, message)."""
     try:
-        r = requests.post(WEBHOOK_URL, json={"ping": True}, timeout=10)
+        r = requests.post(WEBHOOK_URL, json={"ping": True}, headers=_headers(), timeout=10)
     except requests.exceptions.RequestException:
         return "error", t(lang, "chk_unreachable", url=WEBHOOK_URL)
 
     if r.status_code == 404:
         return "error", t(lang, "chk_not_active")
+    if r.status_code == 401:
+        return "error", t(lang, "chk_unauthorized")
     if not 200 <= r.status_code < 300:
         return "error", t(lang, "chk_error", code=r.status_code, detail=_error_detail(r))
 
@@ -285,5 +434,4 @@ def check_n8n(lang):
     if spent:
         minutes = max(1, min(p["set_aside_s"] for p in spent) // 60)
         return "warning", t(lang, "provider_all_spent", n=state["count"], minutes=minutes)
-    return "success", t(lang, "chk_ok", model=state["main_model"] or "—")
-    return "success", t(lang, "chk_ok", model=data.get("model") or "—")
+    return "success", t(lang, "chk_ok", model=state["main_model"] or data.get("model") or "—")

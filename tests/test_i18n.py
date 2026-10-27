@@ -1,5 +1,4 @@
-"""Translation table integrity and the HTML builders that do not need a Streamlit runtime."""
-import importlib
+"""Translation table integrity and label formatting."""
 import re
 
 import pytest
@@ -56,50 +55,3 @@ def test_severity_labels():
     assert i18n.severity_label("en", "low") == "Low"
     assert i18n.severity_label("en", None) == "—"
     assert i18n.severity_label("ar", i18n.ALL)
-
-
-def test_samples_exist_in_both_languages():
-    import samples
-
-    assert len(samples.SAMPLES["ar"]) == len(samples.SAMPLES["en"]) > 0
-    for lang in ("ar", "en"):
-        for item in samples.SAMPLES[lang]:
-            assert len(item["text"]) > 20
-            assert item["type"] in i18n.CASE_TYPES
-
-
-# ── ui helpers that raise no Streamlit calls ─────────────────────────────────
-def test_esc_escapes_html():
-    import ui
-
-    assert ui.esc("<b>&") == "&lt;b&gt;&amp;"
-
-
-def test_ltr_wraps_text():
-    import ui
-
-    assert ui.ltr("2026-10-22").startswith("⁦") and ui.ltr("2026-10-22").endswith("⁩")
-
-
-def test_safe_filename():
-    import ui
-
-    assert ui.safe_filename("قضية/سرقة") == "قضية_سرقة"
-    assert ui.safe_filename("") == "report"
-    assert len(ui.safe_filename("x" * 200)) == 80
-
-
-def test_as_list_shapes():
-    import ui
-
-    assert ui.as_list(None) == []
-    assert ui.as_list(["a"]) == ["a"]
-    assert ui.as_list({"k": "v"}) == ["k: v"]
-    assert ui.as_list("x") == ["x"]
-
-
-def test_styles_css_is_present():
-    import ui
-
-    assert len(ui.STYLES) > 1000
-    assert "--dir" in ui.STYLES or ":root" in ui.STYLES

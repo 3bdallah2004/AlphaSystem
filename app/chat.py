@@ -5,14 +5,20 @@ conversation so far, so the reply can build on everything said before. Files att
 message are read the same way case attachments are (documents give text, images and video
 frames are described by the vision model).
 """
+import json
+import logging
 import threading
+import time
 
 import attachments
 import db
 import extract
 import vision
-from analysis import parse_report, report_as_text, send_to_n8n
+from analysis import extract_severity, parse_report, report_as_text, send_to_n8n
+from config import ALPHA_WORKER
 from i18n import t
+
+log = logging.getLogger(__name__)
 
 MAX_HISTORY = 20          # messages sent as context, oldest dropped first
 MAX_REPORT_CHARS = 8000
@@ -30,6 +36,7 @@ def message_attachment_text(lang, message_id):
     rows = db.list_message_attachments(message_id)
     if not rows:
         return "", []
+    started = time.perf_counter()
     cache = {r["id"]: r.get("description") for r in rows if r.get("description")}
     text, images = extract.describe(lang, rows, cache=cache)
     errors = []
@@ -39,6 +46,8 @@ def message_attachment_text(lang, message_id):
         if errors:
             text = "\n\n".join(part for part in (
                 text, t(lang, "ex_skipped", names="; ".join(errors))) if part)
+    log.info("AI timing phase=chat_attachments message_id=%s files=%d images=%d elapsed_seconds=%.2f",
+             message_id, len(rows), len(images), time.perf_counter() - started)
     return text, errors
 
 
@@ -72,6 +81,19 @@ def build_payload(case, lang, question, message_id=None):
 
 
 def _run_reply(case_id, reply_id, lang):
+    """The background job. Whatever goes wrong, the reply ends as ok or failed, never pending."""
+    try:
+        _write_reply(case_id, reply_id, lang)
+    except Exception as exc:  # an unexpected error must not leave the reply "writing" forever
+        log.exception("Reply %s for case %s failed", reply_id, case_id)
+        try:
+            if db.get_message(reply_id):
+                db.update_message(reply_id, status="failed", error=t(lang, "err_unexpected", err=exc))
+        except Exception:
+            log.exception("Could not mark reply %s as failed", reply_id)
+
+
+def _write_reply(case_id, reply_id, lang):
     """Write the reply to reply_id, reading the files of the question it answers."""
     case = db.get_case(case_id)
     reply = db.get_message(reply_id)
@@ -84,6 +106,9 @@ def _run_reply(case_id, reply_id, lang):
     if not db.get_message(reply_id):   # the conversation was cleared while the reply was written
         return
     if ok:
+        if question and db.list_message_attachments(question["id"]):
+            db.update_message(reply_id, content=result, status="pending", error=None)
+            update_report(case_id, reply_id, lang, allow_pending=True)
         db.update_message(reply_id, content=result, status="ok", error=None)
     else:
         db.update_message(reply_id, status="failed", error=result)
@@ -91,7 +116,7 @@ def _run_reply(case_id, reply_id, lang):
 
 def ask(case_id, question, lang, uploaded=None):
     """Record the question, its files, and start writing the reply on a background thread."""
-    message_id = db.add_message(case_id, "user", question)
+    message_id = db.add_message(case_id, "user", question, worker=ALPHA_WORKER)
     saved, errors = 0, []
     for item in (uploaded or []):
         ok, reason = _save_file(case_id, message_id, item, lang)
@@ -99,7 +124,8 @@ def ask(case_id, question, lang, uploaded=None):
             saved += 1
         else:
             errors.append(f"{item.name}: {reason}")
-    reply_id = db.add_message(case_id, "assistant", "", status="pending", reply_to=message_id)
+    reply_id = db.add_message(case_id, "assistant", "", status="pending", reply_to=message_id,
+                              worker=ALPHA_WORKER)
     threading.Thread(target=_run_reply, args=(case_id, reply_id, lang), daemon=True).start()
     return message_id, reply_id, saved, errors
 
@@ -112,8 +138,39 @@ def _save_file(case_id, message_id, uploaded, lang):
     return False, t(lang, reason, mb=attachments.MAX_ATTACHMENT_MB)
 
 
+def report_from_reply(case, reply_text, lang):
+    """The report to save when a reply becomes the case report: (report_text, severity).
+
+    A reply is usually prose. When the current report is structured (evidence, parties,
+    severity...), the reply joins it as one more section instead of replacing it, so the
+    report keeps its cards. A reply that is itself a structured report replaces it.
+    """
+    current_text = case.get("report_text") or ""
+    if parse_report(reply_text):
+        return reply_text, extract_severity(reply_text) or case.get("severity")
+    current = parse_report(current_text)
+    if not current:
+        return reply_text, extract_severity(reply_text) or case.get("severity")
+    merged = dict(current)
+    merged[t(lang, "chat_report_section")] = reply_text.strip()
+    merged_text = json.dumps(merged, ensure_ascii=False, indent=2)
+    return merged_text, extract_severity(merged_text) or case.get("severity")
+
+
+def update_report(case_id, message_id, lang, *, allow_pending=False):
+    """Save one assistant reply as the case report, keeping the previous version."""
+    case = db.get_case(case_id)
+    message = db.get_message(message_id)
+    if not case or not message:
+        raise ValueError("Case or message not found")
+    report_text, severity = report_from_reply(case, message.get("content") or "", lang)
+    db.update_report_from_message(
+        case_id, message_id, severity=severity, report_text=report_text, allow_pending=allow_pending,
+    )
+
+
 def retry(case_id, reply_id, lang):
-    db.update_message(reply_id, status="pending", error=None, content="")
+    db.update_message(reply_id, status="pending", error=None, content="", worker=ALPHA_WORKER)
     threading.Thread(target=_run_reply, args=(case_id, reply_id, lang), daemon=True).start()
 
 

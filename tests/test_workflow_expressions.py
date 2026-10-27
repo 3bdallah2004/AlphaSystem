@@ -114,6 +114,30 @@ def test_workflow_urls_match_the_provider_base_urls_in_env_example():
         assert re.sub(r"/+$", "", base) + "/chat/completions" == base.rstrip("/") + "/chat/completions"
 
 
+def test_every_request_passes_the_token_check_first():
+    """The webhook goes to "Authorized?" before anything else; a wrong token gets a 401."""
+    data = json.loads(WORKFLOW.read_text(encoding="utf-8"))
+    nodes = {n["name"]: n for n in data["nodes"]}
+    links = data["connections"]
+    assert links["Webhook"]["main"][0][0]["node"] == "Authorized?"
+    allowed, refused = links["Authorized?"]["main"]
+    assert allowed[0]["node"] == "Health check?"
+    assert refused[0]["node"] == "Respond unauthorized"
+    assert nodes["Respond unauthorized"]["parameters"]["options"]["responseCode"] == 401
+    condition = nodes["Authorized?"]["parameters"]["conditions"]["conditions"][0]["leftValue"]
+    assert "ALPHA_WEBHOOK_TOKEN" in condition and "x-alpha-token" in condition
+    # No token configured keeps the old behaviour (open), so existing installs keep working.
+    assert condition.startswith("={{ !$env.ALPHA_WEBHOOK_TOKEN ||")
+
+
+def test_model_calls_wait_less_than_the_app(http_nodes):
+    """The workflow's own timeout follows ALPHA_REQUEST_TIMEOUT, minus a margin for the app."""
+    for name in ("Call LLM", "Chat with LLM"):
+        timeout = http_nodes[name]["parameters"]["options"]["timeout"]
+        assert "ALPHA_REQUEST_TIMEOUT" in timeout and "- 10000" in timeout, name
+        assert timeout.count("{{") == 1 and timeout.count("}}") == 1, name
+
+
 def test_health_answer_sees_the_provider_list(nodes):
     """The app shows a warning when the workflow reports llm_configured=false.
 

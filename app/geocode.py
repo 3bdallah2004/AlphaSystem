@@ -61,6 +61,18 @@ def _clean(location):
 _last_call = 0.0
 _lock = threading.Lock()
 
+# Answers already received, misses included, so the same place is never asked for twice in one
+# run: Nominatim's policy forbids repeating a query, and a miss would otherwise be retried on
+# every page that shows the case.
+_cache = {}
+_cache_lock = threading.Lock()
+CACHE_LIMIT = 2000
+
+
+def clear_cache():
+    with _cache_lock:
+        _cache.clear()
+
 
 def _wait_for_turn():
     """Keep at most one request per second across threads."""
@@ -90,6 +102,21 @@ def find(location, lang="ar"):
     query = _clean(location)
     if not query:
         return None
+    cache_key = (query.lower(), "en" if lang == "en" else "ar")
+    with _cache_lock:
+        if cache_key in _cache:
+            return _cache[cache_key]
+    point, definitive = _lookup(query, lang)
+    if definitive:
+        with _cache_lock:
+            if len(_cache) >= CACHE_LIMIT:
+                _cache.clear()
+            _cache[cache_key] = point
+    return point
+
+
+def _lookup(query, lang):
+    """(point_or_None, definitive). A network failure is not definitive, so it may be retried."""
     try:
         _wait_for_turn()
         response = requests.get(
@@ -101,23 +128,24 @@ def find(location, lang="ar"):
             timeout=(4, GEOCODE_TIMEOUT),
         )
         if not response.ok:
-            return None
+            # 429 / 5xx are temporary; only a clean answer is worth remembering.
+            return None, False
         results = response.json()
     except (requests.exceptions.RequestException, ValueError):
-        return None
+        return None, False
     if not isinstance(results, list) or not results:
-        return None
+        return None, True
     best = results[0]
     if not isinstance(best, dict):
-        return None
+        return None, True
     try:
         importance = float(best.get("importance") or 0)
         lat = float(best["lat"])
         lng = float(best["lon"])
     except (TypeError, ValueError, KeyError):
-        return None
+        return None, True
     if importance < GEOCODE_MIN_IMPORTANCE:
-        return None
+        return None, True
     if not (-90 <= lat <= 90 and -180 <= lng <= 180):
-        return None
-    return round(lat, 6), round(lng, 6)
+        return None, True
+    return (round(lat, 6), round(lng, 6)), True

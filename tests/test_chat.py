@@ -143,6 +143,75 @@ def test_retry_reopens_the_reply(monkeypatch, database, case):
     assert database.get_message(reply_id)["content"] == "محاولة ثانية"
 
 
+def test_reply_error_marks_the_reply_failed(monkeypatch, database, case):
+    """An unexpected error while writing must not leave the reply 'pending' forever."""
+    def boom(*a, **kw):
+        raise RuntimeError("broken file")
+
+    monkeypatch.setattr(chat, "build_payload", boom)
+    reply_id = database.add_message(case, "assistant", "", status="pending")
+    chat._run_reply(case, reply_id, "ar")
+    reply = database.get_message(reply_id)
+    assert reply["status"] == "failed"
+    assert "broken file" in reply["error"]
+
+
+# ── update report from a reply ───────────────────────────────────────────────
+def test_prose_reply_joins_a_structured_report(database, case):
+    report = {"الملخص": "سرقة", "الأدلة": ["كاميرا"], "مستوى الخطورة": "مرتفع"}
+    database.update_case(case, report_text=json.dumps(report, ensure_ascii=False),
+                         status="analyzed", severity="high")
+    reply = database.add_message(case, "assistant", "الشاهد غيّر أقواله.", status="ok")
+    chat.update_report(case, reply, "ar")
+    saved = database.get_case(case)
+    merged = json.loads(saved["report_text"])
+    # Evidence and severity survive; the reply is one more section.
+    assert merged["الأدلة"] == ["كاميرا"]
+    assert merged["تحديث من المحادثة"] == "الشاهد غيّر أقواله."
+    assert saved["severity"] == "high"
+    assert len(database.list_report_versions(case)) == 1
+
+
+def test_structured_reply_replaces_the_report(database, case):
+    database.update_case(case, report_text='{"الملخص": "قديم"}', status="analyzed", severity="low")
+    new = json.dumps({"الملخص": "جديد", "severity": "high"})
+    reply = database.add_message(case, "assistant", new, status="ok")
+    chat.update_report(case, reply, "ar")
+    saved = database.get_case(case)
+    assert json.loads(saved["report_text"])["الملخص"] == "جديد"
+    assert saved["severity"] == "high"
+
+
+def test_prose_reply_over_prose_report_keeps_the_severity(database, case):
+    database.update_case(case, report_text="تقرير نصي", status="analyzed", severity="medium")
+    reply = database.add_message(case, "assistant", "رد نصي", status="ok")
+    chat.update_report(case, reply, "ar")
+    saved = database.get_case(case)
+    assert saved["report_text"] == "رد نصي"
+    assert saved["severity"] == "medium"
+
+
+def test_reply_with_message_attachments_updates_case_report(monkeypatch, database, case):
+    previous = json.dumps({"ملخص القضية": "النتيجة الأولى", "الأدلة": [], "مستوى الخطورة": "منخفض"},
+                          ensure_ascii=False)
+    database.update_case(case, report_text=previous, status="analyzed", severity="low")
+    monkeypatch.setattr(chat, "send_to_n8n", lambda *_args: (True, "المرفق يثبت اختلاف الكمية بين الفاتورة ومحضر الاستلام."))
+
+    message_id, reply_id, saved, errors = chat.ask(
+        case, "حلل المرفق وأضف نتيجته للتقرير.", "ar",
+        uploaded=[Uploaded("new-evidence.txt", b"invoice quantity: 12, received quantity: 8")],
+    )
+
+    assert saved == 1 and errors == []
+    assert _wait(lambda: database.get_message(reply_id)["status"] == "ok")
+    assert _wait(lambda: "تحديث من المحادثة" in database.get_case(case)["report_text"])
+    report = json.loads(database.get_case(case)["report_text"])
+    assert report["الأدلة"] == []
+    assert report["تحديث من المحادثة"] == "المرفق يثبت اختلاف الكمية بين الفاتورة ومحضر الاستلام."
+    assert database.list_report_versions(case)[0]["report_text"] == previous
+    assert database.get_message(message_id)["role"] == "user"
+
+
 # ── clear ────────────────────────────────────────────────────────────────────
 def test_clear_removes_messages_and_their_files_but_keeps_case_files(database, case):
     msg_id = database.add_message(case, "user", "س")

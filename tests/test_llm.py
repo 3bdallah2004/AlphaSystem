@@ -79,8 +79,13 @@ def test_cooldown_expires(monkeypatch):
     assert llm._recover_in(provider["id"]) == 0
 
 
-def test_should_use_backup_false_with_one_provider():
-    assert llm.should_use_backup() is False
+def test_vision_provider_comes_first_for_images(monkeypatch):
+    vision_only = {"index": "vision", "id": "vision:http://v", "name": "vision", "url": "http://v",
+                   "key": "vk", "model": "vm", "vision_model": "vm"}
+    monkeypatch.setattr(llm, "VISION_PROVIDER", vision_only)
+    assert [p["index"] for p in llm.candidates("vision")] == ["vision", "1"]
+    # Text requests never go to the dedicated vision provider.
+    assert [p["index"] for p in llm.candidates("text")] == ["1"]
 
 
 def test_status_reports_state():

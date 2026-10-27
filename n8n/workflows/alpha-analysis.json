@@ -24,6 +24,58 @@
       }
     },
     {
+      "id": "0c1f6a52-4c1e-4c5e-9c1a-000000000020",
+      "name": "Authorized?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        110,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b1f0c7de-0000-4000-8000-000000000020",
+              "leftValue": "={{ !$env.ALPHA_WEBHOOK_TOKEN || ($json.headers || {})['x-alpha-token'] === $env.ALPHA_WEBHOOK_TOKEN }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "0c1f6a52-4c1e-4c5e-9c1a-000000000021",
+      "name": "Respond unauthorized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        420
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: 'Unauthorized: missing or wrong X-Alpha-Token header (ALPHA_WEBHOOK_TOKEN).' }) }}",
+        "options": {
+          "responseCode": 401
+        }
+      }
+    },
+    {
       "id": "0c1f6a52-4c1e-4c5e-9c1a-000000000002",
       "name": "Health check?",
       "type": "n8n-nodes-base.if",
@@ -99,7 +151,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ model: ($env[\"LLM_\" + $json.body.provider_key + \"_MODEL\"] || ($json.body.use_backup && $env.BACKUP_LLM_MODEL) || ($env.LLM_MODEL || 'gpt-4.1-mini')), temperature: 0.3, messages: [{ role: 'system', content: $json.body.language === 'en' ? \"You are an expert criminal investigation analyst. Analyze the submitted case report and return a structured report in clear English. Return only a valid JSON object with no text before or after it, using these keys in this order: \\\"Case summary\\\" (string), \\\"Key facts\\\" (list of strings), \\\"Evidence and leads\\\" (list of strings), \\\"Parties involved\\\" (list of strings), \\\"Possible hypotheses\\\" (list of strings), \\\"Recommended next steps\\\" (list of strings), \\\"Severity\\\" (string: low, medium, or high, with a short reason). Do not invent facts that are not in the report; if important information is missing, say so explicitly. The report may be written in Arabic; write your analysis in English regardless.\" : \"أنت محلل تحقيقات جنائية خبير. حلّل البلاغ المقدَّم وأعد تقريراً منظماً باللغة العربية الفصحى. أعد كائن JSON صالحاً فقط دون أي نص قبله أو بعده، وبالمفاتيح التالية بهذا الترتيب: «ملخص القضية» (نص)، «الوقائع الرئيسية» (قائمة نصوص)، «الأدلة والقرائن» (قائمة نصوص)، «الأطراف المعنية» (قائمة نصوص)، «الفرضيات المحتملة» (قائمة نصوص)، «الخطوات التحقيقية المقترحة» (قائمة نصوص)، «مستوى الخطورة» (نص: منخفض أو متوسط أو مرتفع مع سبب مختصر). لا تخترع وقائع غير موجودة في البلاغ، وإذا نقصت معلومة مهمة فاذكر ذلك صراحة.\" }, { role: 'user', content: $json.body.language === 'en' ? ('Case title: ' + ($json.body.case_name || 'Not provided') + '\\n' + 'Case number: ' + ($json.body.case_number || 'Not provided') + '\\n' + 'Type: ' + ($json.body.case_type || 'General') + '\\n' + 'Location: ' + ($json.body.incident_location || 'Not provided') + '\\n' + 'Incident date: ' + ($json.body.incident_date || 'Not provided') + '\\n\\n' + 'What happened:\\n' + ($json.body.case_text || '')) : ('اسم القضية: ' + ($json.body.case_name || 'غير محدد') + '\\n' + 'رقم القضية: ' + ($json.body.case_number || 'غير محدد') + '\\n' + 'التصنيف: ' + ($json.body.case_type || 'عام') + '\\n' + 'موقع الحادثة: ' + ($json.body.incident_location || 'غير محدد') + '\\n' + 'تاريخ الحادثة: ' + ($json.body.incident_date || 'غير محدد') + '\\n\\n' + 'تفاصيل البلاغ:\\n' + ($json.body.case_text || '')) }] }) }}",
         "options": {
-          "timeout": 110000
+          "timeout": "={{ Math.max(10000, (Number($env.ALPHA_REQUEST_TIMEOUT) || 120) * 1000 - 10000) }}"
         }
       }
     },
@@ -164,7 +216,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ model: ($env[\"LLM_\" + $json.body.provider_key + \"_MODEL\"] || ($json.body.use_backup && $env.BACKUP_LLM_MODEL) || ($env.LLM_MODEL || 'gpt-4.1-mini')), temperature: 0.2, messages: [{ role: 'system', content: $json.body.language === 'en' ? \"You are an expert criminal investigation analyst answering follow-up questions about a case you already analysed. You have the original report, your analysis, and the conversation so far.\\n\\nRules:\\n- Answer the investigator's question directly and concisely, in clear English.\\n- Build on the existing analysis and on anything said earlier in the conversation. Do not repeat the whole analysis unless asked.\\n- New information, documents, images or video may arrive inside the question; treat them as evidence and say how they change or confirm the analysis.\\n- Never invent facts. If the question cannot be answered from what you have, say what is missing.\\n- Reply in plain prose or short lists. Do not return JSON.\" : \"أنت محلل تحقيقات جنائية خبير تجيب على أسئلة متابعة حول قضية حلّلتها سابقاً. لديك نص البلاغ الأصلي وتحليلك والمحادثة السابقة.\\n\\nالقواعد:\\n- أجب عن سؤال المحقق مباشرة وبإيجاز، باللغة العربية الفصحى.\\n- ابنِ على التحليل السابق وعلى ما قيل في المحادثة. لا تُعد التحليل كاملاً إلا إذا طُلب منك.\\n- قد تصل معلومات أو مستندات أو صور أو فيديو جديدة داخل السؤال؛ اعتبرها أدلة وبيّن كيف تغيّر التحليل أو تؤكده.\\n- لا تخترع وقائع. إذا لم يمكن الإجابة من المتاح فاذكر ما ينقص.\\n- أجب بنص عادي أو قوائم قصيرة. لا تُعد JSON.\" }, { role: 'system', content: ($json.body.language === 'en' ? 'Case title: ' : 'اسم القضية: ') + ($json.body.case_name || '—') + '\\n' + ($json.body.language === 'en' ? 'Case number: ' : 'رقم القضية: ') + ($json.body.case_number || '—') + '\\n' + ($json.body.language === 'en' ? 'Type: ' : 'التصنيف: ') + ($json.body.case_type || '—') + '\\n' + ($json.body.language === 'en' ? 'Location: ' : 'الموقع: ') + ($json.body.incident_location || '—') + '\\n' + ($json.body.language === 'en' ? 'Incident date: ' : 'تاريخ الحادثة: ') + ($json.body.incident_date || '—') + '\\n\\n' + ($json.body.language === 'en' ? 'Original report:\\n' : 'نص البلاغ:\\n') + ($json.body.case_text || '') + '\\n\\n' + ($json.body.language === 'en' ? 'Your earlier analysis:\\n' : 'تحليلك السابق:\\n') + ($json.body.report_text || '') }, ...($json.body.history || []), { role: 'user', content: $json.body.question || '' }] }) }}",
         "options": {
-          "timeout": 110000
+          "timeout": "={{ Math.max(10000, (Number($env.ALPHA_REQUEST_TIMEOUT) || 120) * 1000 - 10000) }}"
         }
       }
     },
@@ -271,7 +323,25 @@
       "main": [
         [
           {
+            "node": "Authorized?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authorized?": {
+      "main": [
+        [
+          {
             "node": "Health check?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond unauthorized",
             "type": "main",
             "index": 0
           }

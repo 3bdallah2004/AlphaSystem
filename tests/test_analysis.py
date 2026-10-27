@@ -1,11 +1,13 @@
 """Report parsing, output extraction, severity detection, and the n8n client."""
 import json
+import threading
 
 import pytest
 import requests
 
 import analysis
 import llm
+from i18n import t
 
 
 # ── parse_report ─────────────────────────────────────────────────────────────
@@ -51,6 +53,22 @@ def test_parse_handles_arabic():
 ])
 def test_extract_severity(payload, expected):
     assert analysis.extract_severity(json.dumps(payload, ensure_ascii=False)) == expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("not high", None),
+    ("Not high, but medium", "medium"),
+    ("non-critical; low", "low"),
+    ("غير مرتفعة", None),
+    ("ليست عالية بل متوسطة", "medium"),
+    ("الخطورة العالية", "high"),
+    ("Medium to high", "medium"),
+    ("High (the risk is not low)", "high"),
+    ("الأدلة فعالة لكن الخطورة منخفضة", "low"),     # "فعالة" is not "عالية"
+    ("below average", None),                           # "below" is not "low"
+])
+def test_severity_level_reads_negations_and_whole_words(value, expected):
+    assert analysis.severity_level(value) == expected
 
 
 def test_extract_severity_unknown_or_missing():
@@ -132,15 +150,59 @@ def test_case_payload_translates_type(database, case):
     assert payload["language"] == "en"
 
 
-def test_case_payload_includes_current_report_when_reanalyzing(database, case):
+def test_case_payload_marks_previous_analysis_as_context(database, case):
     updated_report = "التقرير المحدّث يتضمن معلومة جديدة عن القضية."
     database.update_case(case, report_text=updated_report)
 
     payload = analysis.case_payload(database.get_case(case), "ar")
 
-    assert "نص البلاغ الأصلي:" in payload["case_text"]
+    assert "نص البلاغ الأصلي المحدّث (المصدر المعتمد):" in payload["case_text"]
     assert "بلاغ تجريبي عن حادثة سرقة" in payload["case_text"]
+    assert "التحليل السابق (للسياق فقط؛ أعد تقييمه" in payload["case_text"]
     assert updated_report in payload["case_text"]
+    assert "أنشئ تقريراً جديداً" in payload["case_text"]
+
+
+def test_reanalysis_uses_updated_report_and_preserves_previous_version(database, case, monkeypatch):
+    previous = '{"ملخص القضية":"النتيجة السابقة","مستوى الخطورة":"منخفض"}'
+    updated = '{"ملخص القضية":"النتيجة الجديدة","مستوى الخطورة":"مرتفع"}'
+    source = "بلاغ محدّث يذكر أن الشحنة لم تصل إلى المستودع."
+    database.update_case(case, case_text=source, report_text=previous, status="analyzed",
+                         latitude=31.9, longitude=35.2)
+    captured = {}
+
+    monkeypatch.setattr(analysis, "attachments_for_prompt", lambda *_args: ("", [], 0))
+    monkeypatch.setattr(
+        analysis, "send_to_n8n",
+        lambda payload, lang: (captured.update(payload=payload, language=lang) or True, updated),
+    )
+
+    analysis._analyze(case, "ar")
+
+    saved = database.get_case(case)
+    assert source in captured["payload"]["case_text"]
+    assert previous in captured["payload"]["case_text"]
+    assert saved["report_text"] == updated
+    assert saved["severity"] == "high"
+    assert [version["report_text"] for version in database.list_report_versions(case)] == [previous]
+
+
+def test_outdated_analysis_run_cannot_overwrite_a_newer_request(database, case, monkeypatch):
+    previous = '{"ملخص القضية":"النسخة المحفوظة"}'
+    database.update_case(case, case_text="بلاغ محدّث", report_text=previous, status="analyzing",
+                         latitude=31.9, longitude=35.2)
+    monkeypatch.setitem(analysis._analysis_generations, case, 1)
+    monkeypatch.setattr(analysis, "attachments_for_prompt", lambda *_args: ("", [], 0))
+
+    def supersede(payload, lang):
+        analysis._analysis_generations[case] = 2
+        return True, '{"ملخص القضية":"نتيجة قديمة"}'
+
+    monkeypatch.setattr(analysis, "send_to_n8n", supersede)
+    analysis._analyze(case, "ar", generation=1)
+
+    assert database.get_case(case)["report_text"] == previous
+    assert database.list_report_versions(case) == []
 
 
 def test_case_payload_survives_null_columns(database, case):
@@ -153,7 +215,7 @@ def test_case_payload_survives_null_columns(database, case):
 def test_send_to_n8n_success(monkeypatch):
     seen = {}
 
-    def fake_post(url, json=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None):
         seen.update(url=url, payload=json, timeout=timeout)
         return FakeResponse({"output": "تقرير"})
 
@@ -161,6 +223,19 @@ def test_send_to_n8n_success(monkeypatch):
     ok, result = analysis.send_to_n8n({"case_text": "x"}, "ar")
     assert ok and result == "تقرير"
     assert seen["payload"]["provider_key"] == "1"          # tells the workflow which key to use
+
+
+def test_send_to_n8n_logs_timing_without_payload(monkeypatch, caplog):
+    monkeypatch.setattr(analysis.requests, "post", lambda *a, **kw: FakeResponse({"output": "private report"}))
+
+    with caplog.at_level("INFO", logger="analysis"):
+        assert analysis.send_to_n8n({"mode": "chat", "question": "private question"}, "ar") == (
+            True, "private report"
+        )
+
+    assert "AI timing mode=chat provider=1 outcome=success elapsed_seconds=" in caplog.text
+    assert "private question" not in caplog.text
+    assert "private report" not in caplog.text
 
 
 def test_send_to_n8n_connection_error_is_localized(monkeypatch):
@@ -209,6 +284,55 @@ def test_send_to_n8n_sets_provider_aside_on_quota(monkeypatch):
     assert not ok
     assert llm._is_set_aside(llm.PROVIDERS[0]["id"])
     llm.clear_exhausted()
+
+
+def test_send_to_n8n_without_providers_says_so(monkeypatch):
+    """No provider configured is a setup problem, not a quota error (it used to say HTTP 429)."""
+    monkeypatch.setattr(analysis.llm, "PROVIDERS", [])
+    monkeypatch.setattr(analysis.requests, "post",
+                        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no request expected")))
+    ok, result = analysis.send_to_n8n({}, "ar")
+    assert not ok
+    assert result == t("ar", "err_no_provider")
+    assert "429" not in result
+
+
+def test_send_to_n8n_sends_the_webhook_token(monkeypatch):
+    seen = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        seen["headers"] = headers
+        return FakeResponse({"output": "ok"})
+
+    monkeypatch.setattr(analysis, "WEBHOOK_TOKEN", "s3cret")
+    monkeypatch.setattr(analysis.requests, "post", fake_post)
+    assert analysis.send_to_n8n({}, "ar") == (True, "ok")
+    assert seen["headers"] == {"X-Alpha-Token": "s3cret"}
+
+
+def test_send_to_n8n_401_explains_the_token(monkeypatch):
+    monkeypatch.setattr(analysis.requests, "post", lambda *a, **kw: FakeResponse({"error": "x"}, "", 401))
+    ok, result = analysis.send_to_n8n({}, "ar")
+    assert not ok and result == t("ar", "err_unauthorized")
+
+
+def test_analysis_thread_error_marks_the_case_failed(database, case, monkeypatch):
+    """An unexpected error in the background must not leave the case 'analyzing' forever."""
+    def boom(*a, **kw):
+        raise RuntimeError("corrupt attachment")
+
+    monkeypatch.setattr(analysis, "attachments_for_prompt", boom)
+    database.update_case(case, status="analyzing", latitude=31.9, longitude=35.2)
+    analysis._run_analysis(case, "ar")
+    row = database.get_case(case)
+    assert row["status"] == "failed"
+    assert "corrupt attachment" in row["error"]
+
+
+def test_check_n8n_unauthorized(monkeypatch):
+    monkeypatch.setattr(analysis.requests, "post", lambda *a, **kw: FakeResponse(None, "x", 401))
+    level, msg = analysis.check_n8n("ar")
+    assert level == "error" and msg == t("ar", "chk_unauthorized")
 
 
 # ── check_n8n ────────────────────────────────────────────────────────────────
@@ -273,3 +397,36 @@ def test_suggest_details_drops_invalid_type_and_date(monkeypatch):
 def test_suggest_details_failure_returns_empty(monkeypatch):
     monkeypatch.setattr(analysis, "send_to_n8n", lambda *a, **kw: (False, "err"))
     assert analysis.suggest_details("نص", "ar") == {}
+
+
+def test_analysis_overlaps_geocoding_with_attachment_preparation(monkeypatch):
+    case = {
+        "id": 1, "latitude": None, "longitude": None, "case_name": "Case",
+        "case_text": "Original report", "case_number": "1", "case_type": "عام",
+        "location": "Place", "date": "", "report_text": "",
+    }
+    geocode_started = threading.Event()
+    finish_geocode = threading.Event()
+    monkeypatch.setattr(analysis.db, "get_case", lambda case_id: case)
+
+    def locate(case_id, lang):
+        geocode_started.set()
+        assert finish_geocode.wait(timeout=2)
+
+    def attachments_for_prompt(case_id, lang):
+        assert geocode_started.wait(timeout=2)
+        finish_geocode.set()
+        return "Attachment text", [], 0
+
+    def send_to_n8n(payload, lang):
+        assert "Attachment text" in payload["case_text"]
+        return True, '{"severity": "low"}'
+
+    monkeypatch.setattr(analysis, "locate", locate)
+    monkeypatch.setattr(analysis, "attachments_for_prompt", attachments_for_prompt)
+    monkeypatch.setattr(analysis, "send_to_n8n", send_to_n8n)
+    monkeypatch.setattr(analysis.db, "save_analysis_report", lambda *args: None)
+    try:
+        analysis._analyze(1, "ar")
+    finally:
+        finish_geocode.set()

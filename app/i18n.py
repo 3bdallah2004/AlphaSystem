@@ -18,11 +18,8 @@ STRINGS = {
     "language": ("اللغة", "Language"),
     "nav_all": ("كل القضايا", "All cases"),
     "nav_last": ("آخر قضية مفتوحة", "Last opened case"),
-    "nav_about": ("من أنا", "About ME"),
+    "nav_about": ("من أنا", "About me"),
     "new_case": ("قضية جديدة", "New case"),
-    "about_title": ("من أنا", "About me"),
-    "about_subtitle": ("نبذة عن مطوّر Alpha System وروابط التواصل.", "A little about the developer of Alpha System and ways to connect."),
-    "about_eyebrow": ("المطوّر", "THE DEVELOPER"),
     "about_name": ("عبدالله حاج علي", "Abdullah Haj Ali"),
     "about_description": ("أطوّر Alpha System، منصة تساعد على تنظيم القضايا ومراجعة تقاريرها وتحليل مرفقاتها.",
                           "I build Alpha System, a platform for organizing cases, reviewing reports, and analyzing attachments."),
@@ -30,7 +27,6 @@ STRINGS = {
     "about_whatsapp": ("واتساب", "WhatsApp"),
     "about_github": ("جيت هب", "GitHub"),
     "about_email": ("البريد الإلكتروني", "Email"),
-    "about_footer": ("شكراً لزيارتك — Alpha System", "Thanks for visiting — Alpha System"),
     "about_cta": ("اكتشف المزيد", "Discover more"),
     "about_features_label": ("مزايا Alpha System", "Alpha System features"),
     "about_video_controls": ("عناصر التحكم بالفيديو", "Video controls"),
@@ -211,6 +207,15 @@ STRINGS = {
     "err_request": ("خطأ في الاتصال: {err}", "Connection error: {err}"),
     "err_not_active": ("سير عمل التحليل غير مستورد أو غير مفعّل في n8n.",
                        "The analysis workflow isn't imported or active in n8n."),
+    "err_no_provider": ("لا يوجد أي مزوّد ذكاء اصطناعي مضبوط. ضع المفتاح في ‎.env "
+                        "(LLM_API_KEY أو LLM_1_KEY) ثم نفّذ docker compose up -d.",
+                        "No AI provider is configured. Set a key in .env (LLM_API_KEY or LLM_1_KEY), "
+                        "then run docker compose up -d."),
+    "err_quota_all": ("انتهت حصة كل المزوّدين المضبوطين. حاول لاحقاً أو أضف مزوّداً آخر.",
+                      "Every configured provider is out of quota. Try later or add another provider."),
+    "err_unauthorized": ("رفض سير العمل الطلب: قيمة ALPHA_WEBHOOK_TOKEN في التطبيق لا تطابق قيمتها في n8n.",
+                         "The workflow refused the request: ALPHA_WEBHOOK_TOKEN differs between the app and n8n."),
+    "err_unexpected": ("حدث خطأ غير متوقع أثناء التحليل: {err}", "Unexpected error during the analysis: {err}"),
     # Attachments
     "attachments": ("المرفقات", "Attachments"),
     "att_add": ("أضف صوراً أو فيديو أو ملفات إلى هذه القضية",
@@ -234,6 +239,7 @@ STRINGS = {
     "att_readable": ("{n} منها تُقرأ في التحليل", "{n} read by the analysis"),
     "att_not_readable": ("لا تُقرأ: {names}", "not read: {names}"),
     "att_preview": ("اعرض ما سيقرأه التحليل", "Preview what the analysis will read"),
+    "att_image_analysis": ("تحليل الصور المرفقة", "Attached image analysis"),
     "att_nothing_read": ("لا يمكن قراءة محتوى هذه المرفقات.", "Nothing can be read from these attachments."),
     "att_kind_image": ("صورة", "Image"),
     "att_kind_video": ("فيديو", "Video"),
@@ -251,7 +257,6 @@ STRINGS = {
     "ex_audio_transcript": ("تفريغ الصوت", "audio transcript"),
     "vis_not_configured": ("لم يُضبط نموذج قراءة الصور (VISION_MODEL / VISION_API_KEY).",
                            "No vision model is configured (VISION_MODEL / VISION_API_KEY)."),
-    "vis_timeout": ("انتهت مهلة قراءة الصورة.", "Reading the image timed out."),
     "vis_http": ("تعذّرت قراءة الصورة (HTTP {code}): {detail}",
                  "Could not read the image (HTTP {code}): {detail}"),
     "vis_empty": ("لم يُرجع نموذج الصور وصفاً.", "The vision model returned no description."),
@@ -260,24 +265,17 @@ STRINGS = {
                       "The vision model spent its whole reply budget thinking and wrote no description. "
                       "Try again, or raise ALPHA_VISION_MAX_TOKENS."),
     "analysing_attachments": ("نقرأ المرفقات قبل التحليل...", "Reading the attachments before analysis..."),
-    "att_used": ("أُدرج محتوى {n} مرفقاً في التحليل.", "Content from {n} attachment(s) was included in the analysis."),
-    "att_not_used": ("تعذّرت قراءة هذه المرفقات، ولن تدخل في التحليل: {names}",
-                     "These attachments could not be read and were left out of the analysis: {names}"),
 
     # Conversation about a case
     "tab_report": ("التقرير", "Report"),
     "tab_chat": ("المحادثة", "Conversation"),
-    "chat_title": ("محادثة القضية", "Case conversation"),
     "chat_help": ("اسأل عن أي شيء في القضية، أو أضف معلومة جديدة أو صورة أو ملفاً أو مقطع فيديو "
                   "وسيُبنى عليها الرد.",
                   "Ask anything about the case, or add new information, an image, a file or a video, "
                   "and the reply will build on it."),
     "chat_ph": ("اكتب سؤالك أو المعلومة الجديدة...", "Write your question or the new information..."),
-    "chat_send": ("إرسال", "Send"),
     "chat_empty": ("لا توجد محادثة بعد. ابدأ بسؤال عن القضية أو أضف تفصيلاً جديداً.",
                    "No conversation yet. Start with a question about the case, or add a new detail."),
-    "chat_add_files": ("إرفاق ملفات مع الرسالة", "Attach files to the message"),
-    "chat_thinking": ("جارٍ كتابة الرد...", "Writing the reply..."),
     "chat_failed": ("تعذّر الحصول على الرد. يمكنك إعادة المحاولة.",
                     "The reply could not be produced. You can try again."),
     "chat_retry": ("إعادة المحاولة", "Try again"),
@@ -287,12 +285,6 @@ STRINGS = {
     "chat_cleared": ("تم مسح المحادثة.", "Conversation cleared."),
     "chat_sent_files": ("أُرفق {n} ملفاً مع رسالتك.", "{n} file(s) were attached to your message."),
     "chat_need_text": ("اكتب سؤالاً أو أرفق ملفاً.", "Write a question or attach a file."),
-    "chat_new_info": ("معلومة جديدة", "New information"),
-    "chat_question": ("سؤال", "Question"),
-    "chat_files_used": ("قُرئ محتوى مرفقات هذه الرسالة.", "The attachments of this message were read."),
-    "chat_files_skipped": ("لم يُقرأ: {names}", "Could not be read: {names}"),
-    "chat_history_note": ("يُرسل آخر {n} رسالة كسياق مع كل سؤال.",
-                          "The last {n} messages are sent as context with each question."),
     "chat_needs_analysis": ("حلّل القضية أولاً، ثم يمكنك محادثتها وإضافة معلومات جديدة.",
                             "Analyze the case first, then you can discuss it and add new information."),
     "chat_count": ("{n} رسالة في المحادثة.", "{n} message(s) in this conversation."),
@@ -300,22 +292,11 @@ STRINGS = {
     "chat_update_report": ("تحديث التقرير", "Update report"),
     "chat_report_updated": ("تم تحديث تقرير القضية وحفظ النسخة السابقة.",
                             "The case report was updated and the previous version was saved."),
+    "chat_report_section": ("تحديث من المحادثة", "Update from the conversation"),
     "report_versions_title": ("نسخ التقارير السابقة", "Previous report versions"),
     "report_version_selected": ("محتوى {version} — {timestamp}", "{version} contents — {timestamp}"),
     "report_version_empty": ("اختر نسخة من القائمة لعرض تقريرها.", "Select a version to view its report."),
 
-    "err_quota_switched": ("انتهت حصة المزوّد الأساسي لهذا اليوم. سيُستخدم المزوّد البديل في المحاولة القادمة.\n{detail}",
-                           "The main provider's quota is spent for today. The backup provider will be "
-                           "used on the next attempt.\n{detail}"),
-    "provider_backup": ("يُستخدم المزوّد البديل ({model}) لأن حصة المزوّد الأساسي انتهت.",
-                        "Using the backup provider ({model}) because the main provider's quota is spent."),
-    "provider_main": ("المزوّد الأساسي قيد الاستخدام.", "The main provider is in use."),
-    "provider_retry_main": ("العودة للمزوّد الأساسي", "Switch back to the main provider"),
-    "provider_resume": ("سيُعاد استخدام المزوّد الأساسي تلقائياً بعد ~{n} دقيقة.",
-                        "The main provider will be retried automatically in ~{n} minute(s)."),
-    "provider_backup_spent": ("انتهت حصة المزوّد البديل ({model}) أيضاً؛ سيُعاد استخدام المزوّد الأساسي بعد ~{n} دقيقة.",
-                              "The backup provider ({model}) is out of quota too; the main provider "
-                              "will be retried in ~{n} minute(s)."),
     "provider_switched": ("{n} من {total} مزوّدين نفدت حصتهم؛ يُستخدم الآن: {model}",
                           "{n} of {total} providers are out of quota; now using: {model}"),
     "provider_all_spent": ("انتهت حصة المزوّدين كلهم ({n})؛ سيُعاد المحاولة بعد ~{minutes} دقيقة.",
@@ -336,6 +317,9 @@ STRINGS = {
                    "The workflow is ready, but no provider is configured in .env "
                    "(LLM_PROVIDERS, LLM_1_KEY or LLM_API_KEY), so analysis will fail."),
     "chk_ok": ("خدمة التحليل جاهزة. النموذج: {model}", "The analysis service is ready. Model: {model}"),
+    "chk_unauthorized": ("n8n يعمل، لكنه رفض الطلب لأن ALPHA_WEBHOOK_TOKEN غير متطابق بين التطبيق وn8n.",
+                         "n8n is running, but it refused the request: ALPHA_WEBHOOK_TOKEN differs "
+                         "between the app and n8n."),
 }
 
 

@@ -11,7 +11,7 @@ import time
 
 import requests
 
-from config import PROVIDERS, PROVIDER_TIMEOUT, VISION_ENABLED
+from config import PROVIDERS, PROVIDER_TIMEOUT, VISION_ENABLED, VISION_PROVIDER
 
 # How long a provider is set aside after it reports a spent quota. Kept well under a day so
 # the providers keep rotating within a working session.
@@ -67,7 +67,7 @@ def clear_exhausted():
 
 def set_aside(index_or_id):
     """Set aside one provider, by its index in PROVIDERS or by its id."""
-    for provider in PROVIDERS:
+    for provider in PROVIDERS + ([VISION_PROVIDER] if VISION_PROVIDER else []):
         if provider["index"] == str(index_or_id) or provider["id"] == index_or_id:
             _set_aside(provider["id"])
             _record_switch(f'{provider["model"]} out of quota')
@@ -75,44 +75,29 @@ def set_aside(index_or_id):
     return None
 
 
-def set_aside_active(used_index):
-    """Set aside whichever provider a request actually used, reported by its index."""
-    return set_aside(used_index)
-
-
 def candidates(role):
     """Providers to try for this role, best first.
 
     A provider whose quota is spent goes last, so the others are used first; when all are
     spent the one that recovers soonest is still tried, in case its quota already reset.
+    For images, a dedicated vision provider (VISION_BASE_URL / VISION_API_KEY) comes first.
     """
+    if role == "vision" and not VISION_ENABLED:
+        return []
+    pool = list(PROVIDERS)
+    if role == "vision" and VISION_PROVIDER:
+        pool.insert(0, VISION_PROVIDER)
     usable = []
-    for provider in PROVIDERS:
-        if role == "vision" and not VISION_ENABLED:
-            continue
+    for order, provider in enumerate(pool):
         if not provider.get("key") or not provider.get("model"):
             continue
-        usable.append((_is_set_aside(provider["id"]), _recover_in(provider["id"]), provider))
-    usable.sort(key=lambda item: (item[0], item[1]))
-    return [provider for _, _, provider in usable]
+        usable.append((_is_set_aside(provider["id"]), _recover_in(provider["id"]), order, provider))
+    usable.sort(key=lambda item: item[:3])
+    return [item[3] for item in usable]
 
 
 def model_for(provider, role):
     return provider["vision_model"] if role == "vision" else provider["model"]
-
-
-def should_use_backup():
-    """True when the first provider is set aside and another is available."""
-    if len(PROVIDERS) < 2:
-        return False
-    return _is_set_aside(PROVIDERS[0]["id"]) and not _is_set_aside(PROVIDERS[1]["id"])
-
-
-def provider_index_for_use_backup(use_backup):
-    """The provider index the workflow should use, given its boolean use_backup flag."""
-    if use_backup and len(PROVIDERS) > 1:
-        return PROVIDERS[1]["index"]
-    return PROVIDERS[0]["index"] if PROVIDERS else None
 
 
 def status():

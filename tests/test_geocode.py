@@ -11,7 +11,9 @@ def _lookups_on(monkeypatch):
     """conftest turns lookups off for the default suite; these tests turn them back on."""
     monkeypatch.setattr(geocode, "GEOCODE_ENABLED", True)
     monkeypatch.setattr(geocode, "MIN_INTERVAL", 0)     # no waiting between calls in tests
+    geocode.clear_cache()
     yield
+    geocode.clear_cache()
 
 
 class FakeResponse:
@@ -133,6 +135,55 @@ def test_find_does_not_wait_between_calls_when_interval_is_zero(monkeypatch):
     _patch(monkeypatch, FakeResponse(RAMALLAH))
     for _ in range(3):
         assert geocode.find("رام الله") is not None
+
+
+def test_find_remembers_answers_and_misses(monkeypatch):
+    calls = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls.append(params["q"])
+        return FakeResponse(RAMALLAH if params["q"] == "رام الله" else [])
+
+    monkeypatch.setattr(geocode.requests, "get", fake_get)
+    for _ in range(3):
+        assert geocode.find("رام الله") == (31.897801, 35.192422)
+        assert geocode.find("مكان لا وجود له") is None
+    # One request per place: a miss is not asked again on the next page.
+    assert calls == ["رام الله", "مكان لا وجود له"]
+
+
+def test_find_retries_after_a_temporary_failure(monkeypatch):
+    _patch(monkeypatch, FakeResponse(None, status_code=503))
+    assert geocode.find("رام الله") is None
+    _patch(monkeypatch, FakeResponse(RAMALLAH))
+    assert geocode.find("رام الله") == (31.897801, 35.192422)
+
+
+# ── analysis.locate_missing ──────────────────────────────────────────────────
+def test_locate_missing_runs_in_the_background_and_tries_each_case_once(database, monkeypatch):
+    import threading
+
+    ids = [database.create_draft(f"بلاغ رقم {i} عن حادثة") for i in range(5)]
+    seen, done = [], threading.Event()
+
+    def fake_locate(case_id, lang):
+        seen.append(case_id)
+        if len(seen) == 3:
+            done.set()
+        return False
+
+    monkeypatch.setattr(analysis, "locate", fake_locate)
+    monkeypatch.setattr(analysis, "_locate_tried", set())
+    monkeypatch.setattr(analysis, "_locate_running", False)
+    assert analysis.locate_missing(ids, "ar", limit=3) is True
+    assert done.wait(5)
+    for _ in range(50):
+        if not analysis._locate_running:
+            break
+        threading.Event().wait(0.05)
+    assert seen == ids[:3]
+    # The same cases are not looked up again; the next call moves on to the rest.
+    assert analysis.locate_missing(ids[:3], "ar") is False
 
 
 # ── analysis.locate ──────────────────────────────────────────────────────────

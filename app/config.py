@@ -21,8 +21,11 @@ def _default_db_path():
 
 
 WEBHOOK_URL = os.getenv("ALPHA_WEBHOOK_URL") or "http://localhost:5678/webhook/alpha-analyze"
+# Shared secret the workflow checks on every call (header X-Alpha-Token). Empty disables the check.
+WEBHOOK_TOKEN = (os.getenv("ALPHA_WEBHOOK_TOKEN") or "").strip()
 DB_PATH = os.getenv("ALPHA_DB_PATH") or _default_db_path()
 REQUEST_TIMEOUT = int(os.getenv("ALPHA_REQUEST_TIMEOUT") or 120)
+ALPHA_WORKER = (os.getenv("ALPHA_WORKER") or "api").strip() or "api"
 
 # ── Model providers ───────────────────────────────────────────────────────────
 # Any number of OpenAI-compatible providers can be configured, tried in order. When one
@@ -33,8 +36,10 @@ REQUEST_TIMEOUT = int(os.getenv("ALPHA_REQUEST_TIMEOUT") or 120)
 #   LLM_1_URL / LLM_1_KEY / LLM_1_MODEL / LLM_1_VISION_MODEL
 #   LLM_2_URL / ...              the next provider, and so on
 #
-# The older LLM_* / BACKUP_LLM_* names still work: they become providers 1 and 2 when
-# LLM_PROVIDERS is not set, so an existing .env keeps working unchanged.
+# The older names still work and fill in whatever the numbered ones leave empty:
+# LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / VISION_MODEL are provider 1, and
+# BACKUP_LLM_BASE_URL / BACKUP_LLM_API_KEY / BACKUP_LLM_MODEL / BACKUP_VISION_MODEL are
+# provider 2. docker-compose.yml applies the same fallbacks, so n8n sees the same providers.
 VISION_TIMEOUT = int(os.getenv("ALPHA_VISION_TIMEOUT") or 90)
 # A reasoning vision model spends part of the budget thinking before it writes. When it spends
 # all of it and returns nothing, vision.describe_image retries with the larger budget.
@@ -65,41 +70,54 @@ def _provider(index, url, key, model, vision_model="", label=""):
     }
 
 
+# The older variable names behind each numbered field, with their defaults.
+LEGACY_NAMES = {
+    "1": {"URL": ("LLM_BASE_URL", "https://api.openai.com/v1"), "KEY": ("LLM_API_KEY", ""),
+          "MODEL": ("LLM_MODEL", "gpt-4.1-mini"), "VISION_MODEL": ("VISION_MODEL", "")},
+    "2": {"URL": ("BACKUP_LLM_BASE_URL", ""), "KEY": ("BACKUP_LLM_API_KEY", ""),
+          "MODEL": ("BACKUP_LLM_MODEL", ""), "VISION_MODEL": ("BACKUP_VISION_MODEL", "")},
+}
+MAX_PROVIDERS = 9
+
+
+def _setting(index, field):
+    """LLM_<index>_<field>, falling back to its older name and default."""
+    value = (os.getenv(f"LLM_{index}_{field}") or "").strip()
+    if value:
+        return value
+    legacy, default = LEGACY_NAMES.get(str(index), {}).get(field, ("", ""))
+    return ((os.getenv(legacy) or "").strip() if legacy else "") or default
+
+
 def _declared_providers():
     """Providers in the order they should be tried."""
     listed = (os.getenv("LLM_PROVIDERS") or "").strip()
     if listed:
         indexes = [part.strip() for part in listed.split(",") if part.strip()]
-        return [_provider(i, os.getenv(f"LLM_{i}_URL"), os.getenv(f"LLM_{i}_KEY"),
-                          os.getenv(f"LLM_{i}_MODEL"), os.getenv(f"LLM_{i}_VISION_MODEL") or "",
-                          label=os.getenv(f"LLM_{i}_LABEL") or "")
-                for i in indexes]
-    # Legacy two-provider layout.
-    return [
-        _provider("1", os.getenv("LLM_BASE_URL") or "https://api.openai.com/v1",
-                  os.getenv("LLM_API_KEY"), os.getenv("LLM_MODEL") or "gpt-4.1-mini",
-                  os.getenv("VISION_MODEL") or ""),
-        _provider("2", os.getenv("BACKUP_LLM_BASE_URL"), os.getenv("BACKUP_LLM_API_KEY"),
-                  os.getenv("BACKUP_LLM_MODEL"), os.getenv("BACKUP_VISION_MODEL") or ""),
-    ]
+    else:
+        indexes = [str(i) for i in range(1, MAX_PROVIDERS + 1)]
+    return [_provider(i, _setting(i, "URL"), _setting(i, "KEY"), _setting(i, "MODEL"),
+                      _setting(i, "VISION_MODEL"), label=os.getenv(f"LLM_{i}_LABEL") or "")
+            for i in indexes]
 
 
 PROVIDERS = [p for p in _declared_providers() if p]
 
-# Kept for the health check and messages: the first provider is the main one.
-LLM_BASE_URL = PROVIDERS[0]["url"] if PROVIDERS else "https://api.openai.com/v1"
-LLM_MODEL = PROVIDERS[0]["model"] if PROVIDERS else "gpt-4.1-mini"
-LLM_API_KEY = PROVIDERS[0]["key"] if PROVIDERS else ""
+# The model named on image descriptions: the main provider's vision model.
 VISION_MODEL = PROVIDERS[0]["vision_model"] if PROVIDERS else ""
-VISION_BASE_URL = LLM_BASE_URL
-VISION_API_KEY = LLM_API_KEY
-BACKUP_BASE_URL = PROVIDERS[1]["url"] if len(PROVIDERS) > 1 else ""
-BACKUP_API_KEY = PROVIDERS[1]["key"] if len(PROVIDERS) > 1 else ""
-BACKUP_MODEL = PROVIDERS[1]["model"] if len(PROVIDERS) > 1 else ""
 
-
-def backup_ready():
-    return len(PROVIDERS) > 1
+# A dedicated vision provider (VISION_BASE_URL / VISION_API_KEY) is tried before the others for
+# images, so a text-only analysis provider can be paired with a provider that reads images.
+_vision_key = (os.getenv("VISION_API_KEY") or "").strip()
+_vision_url = (os.getenv("VISION_BASE_URL") or "").strip()
+VISION_PROVIDER = None
+if _vision_key or _vision_url:
+    _main = PROVIDERS[0] if PROVIDERS else {}
+    VISION_PROVIDER = _provider("vision", _vision_url or _main.get("url"), _vision_key or _main.get("key"),
+                                (os.getenv("VISION_MODEL") or "").strip() or _main.get("vision_model"),
+                                label="vision")
+    if VISION_PROVIDER:
+        VISION_MODEL = VISION_PROVIDER["vision_model"]
 
 # Attachments sit next to the database, inside the same volume, so both survive a rebuild.
 ATTACHMENTS_DIR = os.getenv("ALPHA_ATTACHMENTS_DIR") or str(Path(DB_PATH).parent / "attachments")

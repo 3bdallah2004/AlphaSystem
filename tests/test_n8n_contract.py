@@ -122,8 +122,8 @@ def test_quota_failure_switches_provider_then_succeeds(workflow, database, case,
     next_script()
     original_post = analysis.requests.post
 
-    def switching_post(url, json=None, timeout=None):
-        response = original_post(url, json=json, timeout=timeout)
+    def switching_post(url, json=None, headers=None, timeout=None):
+        response = original_post(url, json=json, headers=headers, timeout=timeout)
         if response.status_code == 429:
             next_script()
         return response

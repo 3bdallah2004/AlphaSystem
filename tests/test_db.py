@@ -13,14 +13,49 @@ def test_init_creates_tables(database):
 
     conn = sqlite3.connect(DB_PATH)
     names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    columns = {
+        table: {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for table in ("investigations", "messages")
+    }
     conn.close()
     assert {"investigations", "attachments", "messages", "report_versions"} <= names
+    assert journal_mode.lower() == "wal"
+    assert "worker" in columns["investigations"]
+    assert "worker" in columns["messages"]
 
 
 def test_init_is_idempotent(database):
     database.init_db()
     database.init_db()
     assert database.stats()["total"] == 0
+
+
+def test_init_adds_worker_columns_to_existing_database(database, monkeypatch, tmp_path):
+    import sqlite3
+
+    import db as db_module
+
+    path = tmp_path / "existing.db"
+    conn = sqlite3.connect(path)
+    conn.execute("""CREATE TABLE investigations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, case_name TEXT, case_number TEXT, case_type TEXT,
+        location TEXT, date TEXT, case_text TEXT, report_text TEXT, timestamp DATETIME
+    )""")
+    conn.execute("""CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, case_id INTEGER NOT NULL, role TEXT NOT NULL,
+        content TEXT, status TEXT, error TEXT, reply_to INTEGER, timestamp DATETIME
+    )""")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db_module, "DB_PATH", str(path))
+
+    db_module.init_db()
+
+    conn = sqlite3.connect(path)
+    for table in ("investigations", "messages"):
+        assert "worker" in {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    conn.close()
 
 
 def test_create_draft_defaults(database):
@@ -126,12 +161,19 @@ def test_list_cases_limit_and_order(database):
 def test_stats_groups_by_status_and_type(database):
     a = database.create_draft("a")
     b = database.create_draft("b")
-    database.update_case(a, case_type="سرقة")
-    database.update_case(b, case_type="سرقة", status="analyzed")
+    database.update_case(a, case_type="سرقة", severity="high")
+    database.update_case(b, case_type="سرقة", status="analyzed", severity="medium")
+    database.create_draft("c")
     stats = database.stats()
-    assert stats["total"] == 2
-    assert stats["by_status"] == {"draft": 1, "analyzed": 1}
+    assert stats["total"] == 3
+    assert stats["by_status"] == {"draft": 2, "analyzed": 1}
     assert dict(stats["by_type"])["سرقة"] == 2
+    assert dict(stats["by_severity"]) == {"high": 1, "medium": 1, "unknown": 1}
+    assert {(case_type, severity): count for case_type, severity, count in stats["by_type_severity"]} == {
+        ("عام", "unknown"): 1,
+        ("سرقة", "high"): 1,
+        ("سرقة", "medium"): 1,
+    }
 
 
 def test_export_csv_has_bom_and_rows(database, case):
@@ -153,6 +195,23 @@ def test_analyzing_ids_and_fail_interrupted(database):
     assert database.analyzing_ids() == set()
 
 
+def test_fail_interrupted_only_marks_work_for_requested_worker(database):
+    other_case = database.create_draft("other")
+    api_case = database.create_draft("api")
+    database.update_case(other_case, status="analyzing", worker="other")
+    database.update_case(api_case, status="analyzing", worker="api")
+    other_msg = database.add_message(
+        other_case, "assistant", "", status="pending", worker="other")
+    api_msg = database.add_message(api_case, "assistant", "", status="pending", worker="api")
+
+    database.fail_interrupted("restarted", worker="api")
+
+    assert database.get_case(api_case)["status"] == "failed"
+    assert database.get_case(other_case)["status"] == "analyzing"
+    assert database.get_message(api_msg)["status"] == "failed"
+    assert database.get_message(other_msg)["status"] == "pending"
+
+
 # ── Messages ─────────────────────────────────────────────────────────────────
 def test_message_roundtrip(database, case):
     msg_id = database.add_message(case, "user", "سؤال")
@@ -168,11 +227,25 @@ def test_update_message_rejects_unknown(database, case):
         database.update_message(msg_id, case_id=1)
 
 
-def test_count_messages_counts_only_ok(database, case):
-    database.add_message(case, "user", "أ")
-    database.add_message(case, "assistant", "", status="pending")
-    database.add_message(case, "assistant", "", status="failed")
-    assert database.count_messages(case) == 1
+def test_export_csv_neutralises_formulas(database, case):
+    database.update_case(case, case_name='=HYPERLINK("http://evil","x")', location="+972 test",
+                         latitude=-31.5)
+    data = database.export_cases_csv([str(i) for i in range(13)])
+    row = list(csv.reader(io.StringIO(data.decode("utf-8-sig"))))[1]
+    assert row[2] == '\'=HYPERLINK("http://evil","x")'
+    assert row[6] == "'+972 test"
+    # Numbers are not text, so a negative coordinate keeps its value.
+    assert row[7] == "-31.5"
+
+
+def test_update_report_from_message_can_save_a_merged_report(database, case):
+    database.update_case(case, report_text='{"الملخص": "أ"}', status="analyzed", severity="high")
+    reply = database.add_message(case, "assistant", "معلومة جديدة", status="ok")
+    database.update_report_from_message(case, reply, severity="high",
+                                        report_text='{"الملخص": "أ", "تحديث": "معلومة جديدة"}')
+    saved = database.get_case(case)
+    assert saved["report_text"] == '{"الملخص": "أ", "تحديث": "معلومة جديدة"}'
+    assert saved["severity"] == "high"
 
 
 def test_fail_interrupted_marks_pending_messages(database, case):

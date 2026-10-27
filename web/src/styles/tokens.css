@@ -1,0 +1,21 @@
+@theme {
+  --color-ground: #040b1c;
+  --color-bar: #030a19;
+  --color-panel: #08142a;
+  --color-soft: #0b1830;
+  --color-ink: #eef3ff;
+  --color-ink-2: #c7d2ea;
+  --color-muted: #93a3c2;
+  --color-rule: #1b2a47;
+  --color-blue: #0a6cff;
+  --color-blue-2: #2b8cff;
+  --color-blue-text: #6db2ff;
+  --color-accent: #ff6b4a;
+  --color-amber: #f2b35c;
+  --color-ok: #6ee7a8;
+  --color-bubble-me: #0d2147;
+  --font-sans: "Tajawal", sans-serif;
+  --radius-field: 12px;
+  --radius-panel: 16px;
+  --shadow-primary: 0 8px 28px rgb(10 108 255 / 38%);
+}

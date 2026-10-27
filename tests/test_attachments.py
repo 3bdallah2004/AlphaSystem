@@ -22,6 +22,7 @@ class Uploaded:
     (".mp3", "", "audio"),
     (".pdf", "", "pdf"),
     (".txt", "", "text"),
+    (".svg", "image/svg+xml", "text"),     # vision models cannot read SVG; its text can be read
     (".docx", "", "file"),
     ("", "image/jpeg", "image"),
     ("", "video/mp4", "video"),

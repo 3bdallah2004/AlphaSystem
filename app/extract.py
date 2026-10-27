@@ -6,6 +6,7 @@ sent to a vision model. Anything that cannot be read is reported, never silently
 import base64
 import io
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -17,9 +18,14 @@ from pathlib import Path
 from PIL import Image
 
 import attachments as att
+import db
 import llm
 import requests
 from config import AUDIO_TRANSCRIPTION_MODEL, PROVIDER_TIMEOUT
+
+log = logging.getLogger(__name__)
+
+TEXT_SUFFIXES = (".txt", ".md", ".csv", ".log", ".json", ".xml", ".html", ".htm", ".yaml", ".yml", ".svg")
 
 MAX_TEXT_CHARS = 12000          # per document, keeps the analysis prompt manageable
 MAX_VIDEO_FRAMES = 4            # per video
@@ -75,7 +81,7 @@ def text_of(row, limit=MAX_TEXT_CHARS):
     data = att.read(row)
     if not data:
         return None
-    if name.endswith((".txt", ".md", ".csv", ".log", ".json", ".xml", ".html", ".htm", ".yaml", ".yml")):
+    if name.endswith(TEXT_SUFFIXES):
         return data.decode("utf-8", "replace")[:limit]
     if name.endswith(".pdf"):
         return _pdf_text(data, limit)
@@ -157,7 +163,7 @@ def _office_zip_text(data, name, limit):
                 chunks.append(_xml_text(archive.read(path)))
                 if sum(map(len, chunks)) >= limit:
                     break
-    except (OSError, zipfile.BadZipFile, KeyError, RuntimeError):
+    except Exception:  # a damaged archive can raise zlib.error, NotImplementedError, EOFError...
         return None
     text = "\n".join(part for part in chunks if part).strip()
     return text[:limit] or None
@@ -193,7 +199,7 @@ def _archive_text(data, name, limit):
                 chunks.append(f"[{info.filename}]\n{archive.read(info).decode('utf-8', 'replace')}")
                 if sum(map(len, chunks)) >= limit:
                     break
-    except (OSError, zipfile.BadZipFile, KeyError, RuntimeError):
+    except Exception:  # a damaged archive can raise zlib.error, NotImplementedError, EOFError...
         return None
     text = "\n\n".join(chunks).strip()
     return text[:limit] or None
@@ -241,6 +247,19 @@ def _response_detail(response):
     return str(error or "")[:200]
 
 
+def _remember_transcript(row, text):
+    """Cache a transcript on its attachment. Best effort: a failed write only costs a re-run."""
+    try:
+        db.set_attachment_transcript(row["id"], text)
+    except Exception:
+        log.exception("Could not cache the transcript of attachment %s", row.get("id"))
+
+
+def _cached_transcript(row):
+    """The stored transcript: None when not transcribed yet, "" when there was nothing to hear."""
+    return row.get("transcript") if hasattr(row, "get") else None
+
+
 def _video_audio(row):
     exe = _ffmpeg()
     source = att.path_of(row)
@@ -271,7 +290,6 @@ def video_frames(row, duration_guess=None):
         duration = duration_guess or _duration(exe, source)
         if not duration or duration <= 0:
             return []
-        frame = min(FRAME_WIDTH / 16, duration / (MAX_VIDEO_FRAMES + 1))
         uris = []
         for i in range(MAX_VIDEO_FRAMES):
             stamp = round(duration * (i + 1) / (MAX_VIDEO_FRAMES + 1), 2)
@@ -321,6 +339,8 @@ def describe(lang, rows, cache=None):
         kind = row["kind"] or "file"
         name = row["file_name"] or "file"
         att_id = row["id"]
+        if kind == "image" and name.lower().endswith(".svg"):
+            kind = "text"   # older uploads stored SVG as an image; it is read as text now
         if kind == "image":
             uri = image_data_uri(row)
             if uri:
@@ -339,13 +359,20 @@ def describe(lang, rows, cache=None):
                                   for i, uri in enumerate(frames))
                 else:
                     skipped.append(name)
-            audio = _video_audio(row)
-            if audio:
-                transcript, error = transcribe_audio(audio, f"{Path(name).stem}.mp3")
-                if transcript:
-                    texts.append(f"[{name} — {t(lang, 'ex_audio_transcript')}]\n{transcript}")
-                elif error:
-                    skipped.append(f"{name} ({t(lang, 'ex_audio_transcript')}: {error})")
+            transcript, error = _cached_transcript(row), None
+            if transcript is None:
+                # Transcribed once and cached, like the frame descriptions above.
+                audio = _video_audio(row)
+                if audio:
+                    transcript, error = transcribe_audio(audio, f"{Path(name).stem}.mp3")
+                    if transcript:
+                        _remember_transcript(row, transcript)
+                elif _ffmpeg() and att.path_of(row):
+                    _remember_transcript(row, "")   # the video has no sound track
+            if transcript:
+                texts.append(f"[{name} — {t(lang, 'ex_audio_transcript')}]\n{transcript}")
+            elif error:
+                skipped.append(f"{name} ({t(lang, 'ex_audio_transcript')}: {error})")
         elif kind in ("text", "pdf", "file"):
             text = text_of(row)
             if text:
@@ -354,8 +381,12 @@ def describe(lang, rows, cache=None):
                 # Binaries, corrupt documents and unreadable PDFs: say so instead of dropping them.
                 skipped.append(name)
         elif kind == "audio":
-            data = att.read(row)
-            transcript, error = transcribe_audio(data, name) if data else (None, "file missing or empty")
+            transcript, error = _cached_transcript(row), None
+            if not transcript:
+                data = att.read(row)
+                transcript, error = transcribe_audio(data, name) if data else (None, "file missing or empty")
+                if transcript:
+                    _remember_transcript(row, transcript)
             if transcript:
                 texts.append(f"[{name}]\n{transcript}")
             else:

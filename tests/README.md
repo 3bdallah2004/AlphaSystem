@@ -2,8 +2,8 @@
 
 ```bash
 python -m venv .venv
-.venv/Scripts/python.exe -m pip install -r requirements.txt pytest   # Windows
-# python3 -m venv .venv && .venv/bin/pip install -r requirements.txt pytest   # macOS/Linux
+.venv/Scripts/python.exe -m pip install -r requirements.txt pytest httpx2   # Windows
+# python3 -m venv .venv && .venv/bin/pip install -r requirements.txt pytest httpx2   # macOS/Linux
 ```
 
 ```bash
@@ -24,9 +24,7 @@ call is either stubbed or answered by a local HTTP server that mimics the workfl
 | `test_llm.py` | Quota detection, provider ordering, cooldowns, `chat_completions` rotation |
 | `test_analysis.py` | Report parsing, severity, n8n errors, quota fallback, suggestions |
 | `test_chat.py` | Conversation history, payload building, background replies, retry, clear |
-| `test_maps.py` | Map builders, pin colours, popup escaping |
-| `test_i18n_ui.py` | Every string in both languages, placeholder parity, HTML helpers |
-| `test_app_ui.py` | The real `app/main.py` driven by Streamlit's `AppTest`: overview, new-case flow, case page, delete, language toggle |
+| `test_i18n.py` | Every translation string in both languages, placeholder parity, and label helpers |
 | `test_n8n_contract.py` | The app against a local server that mimics the workflow end to end |
 | `test_workflow_expressions.py` | The n8n workflow's own expressions: URL suffix, non-nested model expression, per-provider routing |
 | `test_live_vision.py` | **Skipped unless asked for.** Real providers, real workflow: one image, one video, one full analysis |
