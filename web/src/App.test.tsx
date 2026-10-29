@@ -37,7 +37,6 @@ const caseDetail = {
   report_raw: "",
   versions: [],
   attachments: [],
-  message_count: 0,
 };
 
 function renderApp(initialEntry: string) {
@@ -51,6 +50,30 @@ function renderApp(initialEntry: string) {
 }
 
 describe("application shell", () => {
+  it("discards suggestions for an edited source without requesting extraction per keystroke", async () => {
+    let finish!: (response: Response) => void;
+    let calls = 0;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/suggest")) {
+        calls++;
+        return new Promise<Response>((resolve) => { finish = resolve; });
+      }
+      if (url.startsWith("/api/cases/17?")) return new Response(JSON.stringify(caseDetail));
+      if (url.startsWith("/api/health")) return new Response(JSON.stringify({ level: "success", message: "ready" }));
+      return new Response(JSON.stringify([]));
+    });
+    renderApp("/cases/17/edit?step=2&flow=new&editOriginal=1&lang=en");
+    const source = await screen.findByRole("textbox", { name: "Original report" });
+    await waitFor(() => expect(calls).toBe(1));
+    fireEvent.change(source, { target: { value: "A new complaint with different facts." } });
+    fireEvent.change(source, { target: { value: "The latest complaint with different facts." } });
+    finish(new Response(JSON.stringify({ case_name: "Stale title", location: "Stale place" })));
+    await waitFor(() => expect(screen.queryByText("Suggesting case details in the background. You can continue filling the form.")).not.toBeInTheDocument());
+    expect(screen.getByLabelText("Case title")).toHaveValue("Sample case");
+    expect(screen.getByLabelText("Location")).toHaveValue("Central district");
+    expect(calls).toBe(1);
+  });
   beforeEach(() => {
     localStorage.removeItem("alpha-search-history");
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -523,6 +546,101 @@ describe("application shell", () => {
     await waitFor(() => expect(
       vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("type=")),
     ).toBe(true));
+  });
+
+  it("offers one global assistant that sends the open case with each question", async () => {
+    sessionStorage.clear();
+    const sent: FormData[] = [];
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/health")) {
+        return new Response(JSON.stringify({ level: "success", message: "ready" }), { status: 200 });
+      }
+      if (url.startsWith("/api/chat/messages") && init?.method === "POST") {
+        sent.push(init.body as FormData);
+        return new Response(JSON.stringify({ message_id: 1, reply_id: 2 }), { status: 202 });
+      }
+      if (url.startsWith("/api/cases/17?")) {
+        return new Response(JSON.stringify(caseDetail), { status: 200 });
+      }
+      if (url.startsWith("/api/cases")) {
+        return new Response(JSON.stringify(cases), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    renderApp("/cases/17?lang=en");
+
+    expect(await screen.findByRole("heading", { name: "Sample case" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Conversation/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open the assistant" }));
+    const panel = await screen.findByRole("dialog", { name: "Alpha assistant" });
+    expect(await within(panel).findByText(/ALP-2026-017/)).toBeInTheDocument();
+
+    fireEvent.change(within(panel).getByPlaceholderText("Write a message or attach a file…"), {
+      target: { value: "Which cases look related?" },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].get("text")).toBe("Which cases look related?");
+    expect(sent[0].get("case_id")).toBe("17");
+    sessionStorage.clear();
+  });
+
+  it("applies a change proposed in the conversation only after it is confirmed", async () => {
+    sessionStorage.clear();
+    const action = {
+      type: "update_case", status: "pending", case_id: 17, case_number: "ALP-2026-017", case_name: "Sample case",
+      changes: [{ field: "severity", before: "medium", after: "high" }], append_text: null, error: null,
+    };
+    const reply = {
+      id: 2, case_id: 0, role: "assistant", content: "I'll raise the severity once you confirm.", status: "ok",
+      error: null, reply_to: 1, attachments: [], action,
+    };
+    const posted: string[] = [];
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/health")) {
+        return new Response(JSON.stringify({ level: "success", message: "ready" }), { status: 200 });
+      }
+      if (url.startsWith("/api/messages/2/action/confirm") && init?.method === "POST") {
+        posted.push(url);
+        action.status = "confirmed";
+        return new Response(JSON.stringify(action), { status: 200 });
+      }
+      if (url.startsWith("/api/chat/messages")) {
+        return new Response(JSON.stringify([reply]), { status: 200 });
+      }
+      if (url.startsWith("/api/cases")) {
+        return new Response(JSON.stringify(cases), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    renderApp("/cases?lang=en");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open the assistant" }));
+    const card = await screen.findByRole("group", { name: "Update case" });
+    expect(within(card).getByText("Waiting for your confirmation")).toBeInTheDocument();
+    expect(within(card).getByText("Medium")).toBeInTheDocument();
+    expect(within(card).getByText("High")).toBeInTheDocument();
+    expect(posted).toHaveLength(0);
+    const casesFetched = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).startsWith("/api/cases?")).length;
+
+    fireEvent.click(within(card).getByRole("button", { name: "Confirm" }));
+    expect(await within(card).findByText("Done")).toBeInTheDocument();
+    expect(posted).toHaveLength(1);
+    expect(within(card).queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+    expect(within(card).getByRole("link", { name: /View case/ })).toHaveAttribute("href", "/cases/17?lang=en");
+    // The register is fetched again, so the change shows up outside the conversation too.
+    await waitFor(() => expect(
+      vi.mocked(fetch).mock.calls.filter(([input]) => String(input).startsWith("/api/cases?")).length,
+    ).toBeGreaterThan(casesFetched));
+    sessionStorage.clear();
+  });
+
+  it("sends old per-case conversation links to the case report", async () => {
+    renderApp("/cases/17/chat?lang=en");
+    expect(await screen.findByRole("heading", { name: "Sample case" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Incident summary" })).toBeInTheDocument();
   });
 
   it("asks before leaving a new case with unsaved text", async () => {

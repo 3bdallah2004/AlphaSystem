@@ -74,8 +74,10 @@ def init_db():
                              ("transcript", "TEXT")):
             if column not in cols:
                 conn.execute(f"ALTER TABLE attachments ADD COLUMN {column} {kind}")
-        # The conversation about a case: the investigator's questions, notes and the replies.
-        # reply_to points a reply at the question it answers, whose files it must read.
+        # The investigator's conversation with Alpha (chat.GLOBAL_CHAT as case_id; conversations
+        # saved before it became global keep their case's id). reply_to points a reply at the
+        # question it answers, whose files it must read; focus_case_id is the case that was open
+        # when the question was asked.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,6 +97,17 @@ def init_db():
             conn.execute("ALTER TABLE messages ADD COLUMN reply_to INTEGER")
         if "worker" not in mcols:
             conn.execute("ALTER TABLE messages ADD COLUMN worker TEXT")
+        if "focus_case_id" not in mcols:
+            conn.execute("ALTER TABLE messages ADD COLUMN focus_case_id INTEGER")
+        # A change to the register that a reply proposes (JSON, see chat_actions.py); NULL when
+        # the reply proposes nothing.
+        if "action" not in mcols:
+            conn.execute("ALTER TABLE messages ADD COLUMN action TEXT")
+        for column in ("request_id", "request_fingerprint"):
+            if column not in mcols:
+                conn.execute(f"ALTER TABLE messages ADD COLUMN {column} TEXT")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS messages_request "
+                     "ON messages(case_id, request_id) WHERE request_id IS NOT NULL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS report_versions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,18 +119,19 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS report_versions_case ON report_versions(case_id)")
 
 
-def add_message(case_id, role, content="", status="ok", error=None, reply_to=None, worker=None):
+def add_message(case_id, role, content="", status="ok", error=None, reply_to=None, worker=None,
+                focus_case_id=None):
     with db() as conn:
         cur = conn.execute(
-            "INSERT INTO messages (case_id, role, content, status, error, reply_to, worker) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (case_id, role, content, status, error, reply_to, worker),
+            "INSERT INTO messages (case_id, role, content, status, error, reply_to, worker, focus_case_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (case_id, role, content, status, error, reply_to, worker, focus_case_id),
         )
         return cur.lastrowid
 
 
 def update_message(msg_id, **fields):
-    unknown = set(fields) - {"content", "status", "error", "worker"}
+    unknown = set(fields) - {"content", "status", "error", "worker", "action"}
     if unknown:
         raise ValueError(f"Not editable: {unknown}")
     if not fields:
@@ -133,10 +147,95 @@ def get_message(msg_id):
     return dict(row) if row else None
 
 
+# The status inside a message's action JSON, or NULL when there is no readable action.
+_ACTION_STATUS = "CASE WHEN json_valid(action) THEN json_extract(action, '$.status') END"
+
+
+def claim_action(msg_id, from_status, to_status):
+    """Move a message's action from one status to another. False when it was not in from_status.
+
+    The check and the change are one statement, so two clicks on "confirm" apply a change once.
+    """
+    with db() as conn:
+        cur = conn.execute(
+            f"UPDATE messages SET action=json_set(action, '$.status', ?) WHERE id=? AND {_ACTION_STATUS}=?",
+            (to_status, msg_id, from_status),
+        )
+        return cur.rowcount == 1
+
+
+def fail_interrupted_actions(error):
+    """Actions that were being applied when the app stopped end as failed, not stuck."""
+    with db() as conn:
+        conn.execute(
+            f"UPDATE messages SET action=json_set(action, '$.status', 'failed', '$.error', ?) "
+            f"WHERE {_ACTION_STATUS}='applying'",
+            (error,),
+        )
+
+
 def list_messages(case_id):
     with db() as conn:
         rows = conn.execute("SELECT * FROM messages WHERE case_id=? ORDER BY id", (case_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def chat_history_rows(case_id, before_id=None):
+    """Newest usable candidates first; the caller stops once its context budget is full."""
+    sql = "SELECT * FROM messages WHERE case_id=? AND status='ok'"
+    params = [case_id]
+    if before_id is not None:
+        sql += " AND id<?"
+        params.append(before_id)
+    sql += " AND (TRIM(COALESCE(content, '')) != '' OR action IS NOT NULL) ORDER BY id DESC"
+    with db() as conn:
+        for row in conn.execute(sql, params):
+            yield dict(row)
+
+
+def chat_case_rows():
+    """Read the overview in one cursor instead of reopening the database for every case."""
+    with db() as conn:
+        for row in conn.execute("SELECT * FROM investigations ORDER BY id DESC"):
+            yield dict(row)
+
+
+def chat_attachment_rows(case_id):
+    with db() as conn:
+        return [dict(row) for row in conn.execute(
+            "SELECT a.* FROM attachments a JOIN messages m ON m.id=a.message_id "
+            "WHERE m.case_id=? ORDER BY a.id", (case_id,))]
+
+
+def create_chat_turn(case_id, content, worker, focus_case_id, request_id=None, fingerprint=None):
+    """Atomically record a turn; transport retries with the same id reuse the original turn."""
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if request_id:
+            existing = conn.execute(
+                "SELECT id, request_fingerprint FROM messages WHERE case_id=? AND request_id=?",
+                (case_id, request_id)).fetchone()
+            if existing:
+                if existing["request_fingerprint"] != fingerprint:
+                    raise ValueError("request_id already belongs to another message")
+                reply = conn.execute("SELECT id FROM messages WHERE reply_to=? AND role='assistant' ORDER BY id LIMIT 1",
+                                     (existing["id"],)).fetchone()
+                return existing["id"], reply["id"], False
+        user_id = conn.execute(
+            "INSERT INTO messages (case_id,role,content,status,worker,focus_case_id,request_id,request_fingerprint) "
+            "VALUES (?,'user',?,'ok',?,?,?,?)",
+            (case_id, content, worker, focus_case_id, request_id, fingerprint)).lastrowid
+        reply_id = conn.execute(
+            "INSERT INTO messages (case_id,role,content,status,reply_to,worker) VALUES (?,'assistant','','pending',?,?)",
+            (case_id, user_id, worker)).lastrowid
+    return user_id, reply_id, True
+
+
+def claim_reply_retry(reply_id, worker):
+    with db() as conn:
+        return conn.execute(
+            "UPDATE messages SET status='pending', error=NULL, content='', action=NULL, worker=? "
+            "WHERE id=? AND role='assistant' AND status='failed'", (worker, reply_id)).rowcount == 1
 
 
 def delete_messages(case_id):
@@ -262,38 +361,6 @@ def delete_case(inv_id):
         conn.execute("DELETE FROM investigations WHERE id=?", (inv_id,))
 
 
-def update_report_from_message(case_id, message_id, severity=None, report_text=None, allow_pending=False):
-    """Save an assistant reply as the current report, preserving the previous version.
-
-    report_text is what to save when it differs from the reply itself (chat.report_from_reply
-    folds a prose reply into the structured report it updates).
-    """
-    with db() as conn:
-        status_filter = "status IN ('ok', 'pending')" if allow_pending else "status='ok'"
-        message = conn.execute(
-            f"SELECT content FROM messages WHERE id=? AND case_id=? AND role='assistant' AND {status_filter}",
-            (message_id, case_id),
-        ).fetchone()
-        if not message or not (message["content"] or "").strip():
-            raise ValueError("The selected message is not a completed assistant reply")
-        case = conn.execute("SELECT report_text FROM investigations WHERE id=?", (case_id,)).fetchone()
-        if not case:
-            raise ValueError("Case not found")
-        new_report = report_text if (report_text or "").strip() else message["content"]
-        previous = case["report_text"]
-        if previous and previous != new_report:
-            conn.execute(
-                "INSERT INTO report_versions (case_id, report_text) VALUES (?, ?)",
-                (case_id, previous),
-            )
-        conn.execute(
-            "UPDATE investigations SET report_text=?, "
-            "status=CASE WHEN status='analyzing' THEN status ELSE 'analyzed' END, "
-            "severity=?, error=NULL WHERE id=?",
-            (new_report, severity, case_id),
-        )
-
-
 def save_analysis_report(case_id, report_text, severity=None):
     """Save a new analysis and preserve the report it replaces."""
     with db() as conn:
@@ -382,6 +449,19 @@ def stats():
         "by_severity": by_severity,
         "by_type_severity": by_type_severity,
     }
+
+
+def find_case_by_number(case_number):
+    """The case with this number, ignoring case and surrounding spaces."""
+    number = str(case_number or "").strip()
+    if not number:
+        return None
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM investigations WHERE UPPER(TRIM(case_number)) = UPPER(?) ORDER BY id LIMIT 1",
+            (number,),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def case_number_exists(case_number, exclude_id=None):

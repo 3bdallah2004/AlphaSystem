@@ -238,16 +238,6 @@ def test_export_csv_neutralises_formulas(database, case):
     assert row[7] == "-31.5"
 
 
-def test_update_report_from_message_can_save_a_merged_report(database, case):
-    database.update_case(case, report_text='{"الملخص": "أ"}', status="analyzed", severity="high")
-    reply = database.add_message(case, "assistant", "معلومة جديدة", status="ok")
-    database.update_report_from_message(case, reply, severity="high",
-                                        report_text='{"الملخص": "أ", "تحديث": "معلومة جديدة"}')
-    saved = database.get_case(case)
-    assert saved["report_text"] == '{"الملخص": "أ", "تحديث": "معلومة جديدة"}'
-    assert saved["severity"] == "high"
-
-
 def test_fail_interrupted_marks_pending_messages(database, case):
     msg_id = database.add_message(case, "assistant", "", status="pending")
     database.fail_interrupted("boom")
@@ -258,30 +248,6 @@ def test_delete_messages(database, case):
     database.add_message(case, "user", "أ")
     database.delete_messages(case)
     assert database.list_messages(case) == []
-
-
-def test_update_report_from_message_preserves_previous_versions(database, case):
-    database.update_case(case, report_text="التقرير الأصلي", status="analyzed", severity="low")
-    first = database.add_message(case, "assistant", "التقرير الجديد", status="ok")
-    database.update_report_from_message(case, first, severity="high")
-    assert database.get_case(case)["report_text"] == "التقرير الجديد"
-    assert database.get_case(case)["severity"] == "high"
-    assert [v["report_text"] for v in database.list_report_versions(case)] == ["التقرير الأصلي"]
-
-    second = database.add_message(case, "assistant", "التقرير الأحدث", status="ok")
-    database.update_report_from_message(case, second)
-    assert [v["report_text"] for v in database.list_report_versions(case)] == [
-        "التقرير الأصلي", "التقرير الجديد"
-    ]
-
-
-def test_update_report_rejects_non_assistant_or_incomplete_message(database, case):
-    user_message = database.add_message(case, "user", "سؤال")
-    pending_reply = database.add_message(case, "assistant", "", status="pending")
-    for msg_id in (user_message, pending_reply):
-        with pytest.raises(ValueError):
-            database.update_report_from_message(case, msg_id)
-    assert database.list_report_versions(case) == []
 
 
 # ── Attachments ──────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -27,6 +28,7 @@ log = logging.getLogger(__name__)
 async def lifespan(_app):
     db.init_db()
     db.fail_interrupted(f"{t('ar', 'interrupted')}\n{t('en', 'interrupted')}", ALPHA_WORKER)
+    db.fail_interrupted_actions(f"{t('ar', 'act_interrupted')}\n{t('en', 'act_interrupted')}")
     yield
 
 
@@ -35,6 +37,14 @@ app.include_router(meta.router, prefix="/api")
 app.include_router(cases.router, prefix="/api")
 app.include_router(attachments.router, prefix="/api")
 app.include_router(messages.router, prefix="/api")
+
+
+@app.middleware("http")
+async def request_timing(request: Request, call_next):
+    started = time.perf_counter()
+    response = await call_next(request)
+    response.headers["Server-Timing"] = f"app;dur={(time.perf_counter() - started) * 1000:.2f}"
+    return response
 
 if os.getenv("ALPHA_ENV") == "development":
     app.add_middleware(

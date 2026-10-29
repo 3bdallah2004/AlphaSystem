@@ -130,14 +130,14 @@ npm run dev
 
 The Vite development server runs at `http://localhost:5173` and proxies `/api` requests to FastAPI on port `8000`.
 
-## Case conversations
+## Assistant
 
-After analysis, each case has a report and a conversation. Users can ask questions about the case, add information, and attach files to messages. Responses use the original report, the latest analysis, and up to the last 20 conversation messages.
+A single assistant is available from the chat button on every page. It is one conversation across all cases: users can ask about any case, compare cases, look for patterns, and attach files to messages. Each reply uses an overview of every registered case (number, title, type, status, severity, location, date and a summary of its analysis), the full report and analysis of the case open on screen when the question was asked, and up to the last 20 conversation messages.
 
+- The conversation stays open while moving between pages and cases.
 - Replies are generated in the background so users can continue working.
 - Failed replies can be retried without losing the original question.
-- A reply can be added to the case report while preserving previous report versions.
-- Clearing a conversation removes its messages and message attachments without deleting case attachments.
+- Clearing the conversation removes its messages and message attachments without deleting case attachments.
 - Pending replies are marked as failed after a service restart and can be retried.
 
 ## Attachments and multimodal analysis

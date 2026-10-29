@@ -18,7 +18,7 @@ function MarkerLayer({ cases, search, lang, untitled }: Props) {
     const group = L.markerClusterGroup({ showCoverageOnHover: false, maxClusterRadius: 48 });
     cases.forEach((item) => {
       if (item.latitude == null || item.longitude == null) return;
-      const color = item.severity === "high" ? "#ff6b4a" : item.severity === "medium" ? "#f2b35c" : "#6ee7a8";
+      const color = item.severity === "high" ? "var(--color-accent)" : item.severity === "medium" ? "var(--color-amber)" : "var(--color-ok)";
       const marker = L.marker([item.latitude, item.longitude], {
         icon: L.divIcon({
           className: "case-map-marker",

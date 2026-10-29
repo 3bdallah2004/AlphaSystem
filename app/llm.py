@@ -9,7 +9,7 @@ import os
 import threading
 import time
 
-import requests
+import http_pool as requests
 
 from config import PROVIDERS, PROVIDER_TIMEOUT, VISION_ENABLED, VISION_PROVIDER
 

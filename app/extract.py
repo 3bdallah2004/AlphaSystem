@@ -20,7 +20,7 @@ from PIL import Image
 import attachments as att
 import db
 import llm
-import requests
+import http_pool as requests
 from config import AUDIO_TRANSCRIPTION_MODEL, PROVIDER_TIMEOUT
 
 log = logging.getLogger(__name__)

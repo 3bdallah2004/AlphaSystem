@@ -139,13 +139,15 @@ def test_quota_failure_switches_provider_then_succeeds(workflow, database, case,
 def test_chat_turn_contract(workflow, database, case):
     workflow.script = [(200, {"output": "رد المحلل"})]
     database.update_case(case, status="analyzed", report_text=json.dumps(REPORT, ensure_ascii=False))
-    payload = __import__("chat").build_payload(database.get_case(case), "ar", "من المشتبه به؟")
+    payload = __import__("chat").build_payload("ar", "من المشتبه به؟", focus_case_id=case)
     ok, result = analysis.send_to_n8n(payload, "ar")
     assert ok and result == "رد المحلل"
     sent = workflow.calls[0]
     assert sent["mode"] == "chat"
     assert sent["question"] == "من المشتبه به؟"
+    assert sent["focus_case_id"] == case
     assert "سرقة مستودع" in sent["report_text"]
+    assert "ALP-2026-001" in sent["cases_overview"]
 
 
 def test_suggestion_contract(workflow, database, case):

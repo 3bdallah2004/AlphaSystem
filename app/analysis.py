@@ -1,12 +1,16 @@
 """Client for the n8n analysis workflow (n8n/workflows/alpha-analysis.json)."""
 import json
+import hashlib
+import itertools
 import logging
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from collections import OrderedDict
+from concurrent.futures import Future
+from datetime import date
 
-import requests
+import http_pool as requests
 
 import db
 import extract
@@ -17,8 +21,22 @@ from config import ALPHA_WORKER, REQUEST_TIMEOUT, WEBHOOK_TOKEN, WEBHOOK_URL
 from i18n import CASE_TYPES, case_type_label, t
 
 log = logging.getLogger(__name__)
-_analysis_lock = threading.Lock()
+_analysis_lock = threading.RLock()
 _analysis_generations = {}
+_analysis_inputs = {}
+_generation_sequence = itertools.count(1)
+_suggest_lock = threading.Lock()
+_suggest_cache = OrderedDict()
+_suggest_pending = {}
+SUGGEST_CACHE_TTL = 300
+SUGGEST_CACHE_LIMIT = 128
+SUGGEST_PROMPT_VERSION = 1
+
+
+def _processing_signature():
+    # Credentials participate only in a digest; no private input or key is logged.
+    config = (WEBHOOK_URL, WEBHOOK_TOKEN, llm.PROVIDERS, SUGGEST_PROMPT_VERSION)
+    return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
 
 OUTPUT_KEYS = ["output", "المخرجات", "report", "result", "response", "text", "message"]
 CODE_FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*(.*?)\s*```$", re.S)
@@ -231,7 +249,7 @@ def send_to_n8n(payload, lang, timeout=REQUEST_TIMEOUT):
     return False, f"{t(lang, 'err_quota_all')}\n{last_error}".strip()
 
 
-def suggest_details(case_text, lang):
+def _suggest_details(case_text, lang):
     """Title, type, location and date suggested from the report text. Empty dict when unavailable."""
     ok, result = send_to_n8n({"mode": "suggest", "case_text": case_text, "language": lang}, lang, timeout=60)
     data = parse_report(result) if ok else None
@@ -243,9 +261,55 @@ def suggest_details(case_text, lang):
         "location": str(data.get("location") or "").strip(),
         "date": str(data.get("date") or "").strip(),
     }
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", suggestion["date"]):
+    try:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", suggestion["date"]):
+            raise ValueError("Not an ISO date")
+        date.fromisoformat(suggestion["date"])
+    except ValueError:
         suggestion["date"] = ""
     return {k: v for k, v in suggestion.items() if v}
+
+
+def suggest_details(case_text, lang, case_id=None):
+    """Reuse successful extraction only for the same case, exact source and configuration.
+
+    Concurrent identical requests share one call; failures are not cached. Standalone callers
+    without a case scope remain uncached so results can never cross case boundaries.
+    """
+    if case_id is None:
+        return _suggest_details(case_text, lang)
+    key = (str(db.DB_PATH), case_id, lang, _processing_signature(),
+           hashlib.sha256(case_text.encode()).hexdigest())
+    started = time.perf_counter()
+    with _suggest_lock:
+        cached = _suggest_cache.get(key)
+        if cached and time.monotonic() - cached[0] < SUGGEST_CACHE_TTL:
+            _suggest_cache.move_to_end(key)
+            log.info("AI timing mode=suggest case_id=%s outcome=cache_hit elapsed_seconds=%.4f",
+                     case_id, time.perf_counter() - started)
+            return dict(cached[1])
+        _suggest_cache.pop(key, None)
+        future = _suggest_pending.get(key)
+        owner = future is None
+        if owner:
+            future = _suggest_pending[key] = Future()
+    if not owner:
+        return dict(future.result())
+    try:
+        result = _suggest_details(case_text, lang)
+        with _suggest_lock:
+            if result:
+                _suggest_cache[key] = (time.monotonic(), dict(result))
+                while len(_suggest_cache) > SUGGEST_CACHE_LIMIT:
+                    _suggest_cache.popitem(last=False)
+        future.set_result(result)
+        return dict(result)
+    except Exception as exc:
+        future.set_exception(exc)
+        raise
+    finally:
+        with _suggest_lock:
+            _suggest_pending.pop(key, None)
 
 
 def attachments_for_prompt(case_id, lang):
@@ -295,6 +359,7 @@ def _run_analysis(inv_id, lang, generation=None):
             with _analysis_lock:
                 if _analysis_generations.get(inv_id) == generation:
                     del _analysis_generations[inv_id]
+                    _analysis_inputs.pop(inv_id, None)
 
 
 def _analyze(inv_id, lang, generation=None):
@@ -304,38 +369,26 @@ def _analyze(inv_id, lang, generation=None):
     case = db.get_case(inv_id)
     if not case:
         return
-    geocode_pool = None
-    geocode_future = None
     if case["latitude"] is None:
-        phase_started = time.perf_counter()
-        geocode_pool = ThreadPoolExecutor(max_workers=1)
-        geocode_future = geocode_pool.submit(locate, inv_id, lang)
-    try:
-        payload = case_payload(case, lang)
-        attachment_text, _, _ = attachments_for_prompt(inv_id, lang)
-        if attachment_text:
-            payload["case_text"] = f"{payload.get('case_text') or ''}\n\n{attachment_text}".strip()
-        ok, result = send_to_n8n(payload, lang)
-    finally:
-        if geocode_future:
-            try:
-                geocode_future.result()
-            finally:
-                geocode_pool.shutdown(wait=True)
-            log.info("AI timing phase=geocode case_id=%s elapsed_seconds=%.2f",
-                     inv_id, time.perf_counter() - phase_started)
+        locate_later(inv_id, lang)
+    payload = case_payload(case, lang)
+    attachment_text, _, _ = attachments_for_prompt(inv_id, lang)
+    if attachment_text:
+        payload["case_text"] = f"{payload.get('case_text') or ''}\n\n{attachment_text}".strip()
+    ok, result = send_to_n8n(payload, lang)
     if not db.get_case(inv_id):  # deleted while it was being analyzed
         log.info("AI timing mode=analysis case_id=%s outcome=deleted elapsed_seconds=%.2f",
                  inv_id, time.perf_counter() - started)
         return
-    if not _is_current_analysis(inv_id, generation):
-        log.info("AI timing mode=analysis case_id=%s outcome=superseded elapsed_seconds=%.2f",
-                 inv_id, time.perf_counter() - started)
-        return
-    if ok:
-        db.save_analysis_report(inv_id, result, extract_severity(result))
-    else:
-        db.update_case(inv_id, status="failed", error=result)
+    with _analysis_lock:
+        if not _is_current_analysis(inv_id, generation):
+            log.info("AI timing mode=analysis case_id=%s outcome=superseded elapsed_seconds=%.2f",
+                     inv_id, time.perf_counter() - started)
+            return
+        if ok:
+            db.save_analysis_report(inv_id, result, extract_severity(result))
+        else:
+            db.update_case(inv_id, status="failed", error=result)
     log.info("AI timing mode=analysis case_id=%s outcome=%s elapsed_seconds=%.2f",
              inv_id, "success" if ok else "failed", time.perf_counter() - started)
 
@@ -352,7 +405,44 @@ def locate(inv_id, lang):
     point = geocode.find(case["location"] or "", lang)
     if not point:
         return False
-    db.update_case(inv_id, latitude=point[0], longitude=point[1])
+    # A slow lookup must not replace a pin or location edited while it was in flight.
+    with db.db() as conn:
+        cursor = conn.execute(
+            "UPDATE investigations SET latitude=?, longitude=? "
+            "WHERE id=? AND latitude IS NULL AND longitude IS NULL AND location IS ?",
+            (point[0], point[1], inv_id, case["location"]),
+        )
+        return cursor.rowcount > 0
+
+
+_locate_jobs_lock = threading.Lock()
+_locate_jobs = set()
+
+
+def locate_later(inv_id, lang):
+    """Optional map enrichment never holds up a save or completed AI analysis."""
+    case = db.get_case(inv_id)
+    if not case or case["latitude"] is not None or not case.get("location"):
+        return False
+    key = (str(db.DB_PATH), inv_id, case["location"], lang)
+    with _locate_jobs_lock:
+        if key in _locate_jobs:
+            return False
+        _locate_jobs.add(key)
+
+    def work():
+        started = time.perf_counter()
+        try:
+            locate(inv_id, lang)
+        except Exception:
+            log.exception("Could not locate case %s", inv_id)
+        finally:
+            with _locate_jobs_lock:
+                _locate_jobs.discard(key)
+            log.info("AI timing phase=geocode case_id=%s elapsed_seconds=%.2f",
+                     inv_id, time.perf_counter() - started)
+
+    threading.Thread(target=work, daemon=True).start()
     return True
 
 
@@ -396,10 +486,24 @@ def locate_missing(case_ids, lang, limit=3):
 def start_analysis(inv_id, lang):
     """Mark the case as analyzing and analyze it on a background thread, so the page stays usable."""
     with _analysis_lock:
-        generation = _analysis_generations.get(inv_id, 0) + 1
+        case = db.get_case(inv_id)
+        if not case:
+            return False
+        files = db.list_attachments(inv_id)
+        source = {k: case.get(k) for k in (
+            "case_text", "case_name", "case_number", "case_type", "location", "date", "report_text")}
+        source["attachments"] = [{k: item.get(k) for k in (
+            "id", "file_name", "stored_name", "mime_type", "size", "kind")} for item in files]
+        signature = (str(db.DB_PATH), lang, _processing_signature(),
+                     hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest())
+        if inv_id in _analysis_generations and _analysis_inputs.get(inv_id) == signature:
+            return False
+        generation = next(_generation_sequence)
         _analysis_generations[inv_id] = generation
-    db.update_case(inv_id, status="analyzing", error=None, worker=ALPHA_WORKER)
+        _analysis_inputs[inv_id] = signature
+        db.update_case(inv_id, status="analyzing", error=None, worker=ALPHA_WORKER)
     threading.Thread(target=_run_analysis, args=(inv_id, lang, generation), daemon=True).start()
+    return True
 
 
 def check_n8n(lang):

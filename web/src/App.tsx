@@ -50,8 +50,10 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { api, Attachment, CaseDetail, CaseSummary, ChatMessage, GeoPoint } from "./api/client";
+import { api, Attachment, CaseDetail, CaseSummary, ChatAction, ChatMessage, GeoPoint } from "./api/client";
 import { Language, translate } from "./i18n";
+import ThemeSwitcher from "./components/ThemeSwitcher";
+import { readStoredValue, writeStoredValue } from "./storage";
 
 const MapCanvas = lazy(() => import("./components/MapCanvas"));
 const LocationPicker = lazy(() => import("./components/LocationPicker"));
@@ -65,7 +67,7 @@ const SEARCH_HISTORY_KEY = "alpha-search-history";
 const SEARCH_HISTORY_LIMIT = 8;
 
 function loadSearchHistory(): string[] {
-  const saved = localStorage.getItem(SEARCH_HISTORY_KEY);
+  const saved = readStoredValue(SEARCH_HISTORY_KEY);
   if (!saved) return [];
   try {
     const parsed: unknown = JSON.parse(saved);
@@ -88,7 +90,7 @@ function useLocale(): Locale {
 
 function LocaleProvider({ children }: { children: ReactNode }) {
   const [params, setParams] = useSearchParams();
-  const stored = localStorage.getItem("alpha-language");
+  const stored = readStoredValue("alpha-language");
   const lang = (params.get("lang") === "en" || params.get("lang") === "ar"
     ? params.get("lang")
     : stored === "en" ? "en" : "ar") as Language;
@@ -96,7 +98,7 @@ function LocaleProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     document.documentElement.lang = lang;
     document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
-    localStorage.setItem("alpha-language", lang);
+    writeStoredValue("alpha-language", lang);
   }, [lang]);
 
   useEffect(() => {
@@ -146,9 +148,9 @@ function App() {
                 <Route path="/cases/new" element={<CaseEditor />} />
                 <Route path="/cases/:id/edit" element={<CaseEditor />} />
                 <Route path="/cases/:id" element={<Workspace mode="report" />} />
-                <Route path="/cases/:id/chat" element={<Workspace mode="chat" />} />
                 <Route path="/cases/:id/sources" element={<Workspace mode="sources" />} />
-                <Route path="/cases/:id/chat/sources" element={<Workspace mode="chat-sources" />} />
+                <Route path="/cases/:id/chat" element={<LegacyChatRedirect />} />
+                <Route path="/cases/:id/chat/sources" element={<LegacyChatRedirect sources />} />
                 <Route path="/about" element={<AboutPage />} />
                 <Route path="*" element={<Navigate to="/cases" replace />} />
               </Route>
@@ -243,6 +245,7 @@ function AppShell() {
           <span><strong>{t("brand")}</strong><small>{t("tagline")}</small></span>
         </Link>
         <div className="top-actions">
+          <ThemeSwitcher lang={lang} />
           {!isAbout && <ServiceStatus />}
           {!isAbout && <button className="button button-primary button-small new-case-button" onClick={() => {
             navigate(localizedPath("/cases/new?step=1", location.search, lang));
@@ -263,6 +266,7 @@ function AppShell() {
       <main className={`main-content ${isAbout ? "main-content-about" : ""}`}>
         <div className="route-view" key={location.pathname}><Outlet /></div>
       </main>
+      {!isAbout && <ChatWidget />}
       {menuOpen && <div className={`mobile-menu-backdrop ${menuClosing ? "menu-closing" : ""}`} onMouseDown={(event) => {
         if (event.target === event.currentTarget) closeMenu();
       }}>
@@ -350,7 +354,7 @@ function SearchFilters({ compact = false }: { compact?: boolean }) {
         ].slice(0, SEARCH_HISTORY_LIMIT);
         historyRef.current = updatedHistory;
         setHistory(updatedHistory);
-        localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(updatedHistory));
+        writeStoredValue(SEARCH_HISTORY_KEY, JSON.stringify(updatedHistory));
       }
     }, 200);
     return () => window.clearTimeout(timer);
@@ -431,7 +435,7 @@ function RegisterPage() {
   const results = useCaseResults();
   const cases = results.data?.cases ?? [];
   const stats = results.data?.stats as CaseStats | undefined;
-  const lastCaseId = localStorage.getItem("alpha-last-case");
+  const lastCaseId = readStoredValue("alpha-last-case");
   const lastCaseName = sessionStorage.getItem("alpha-last-case-name");
   return (
     <section className="register-page">
@@ -551,7 +555,7 @@ function SummaryStat({ status, label, value }: { status: string; label: string; 
 }
 
 function rememberCase(id: number) {
-  localStorage.setItem("alpha-last-case", String(id));
+  writeStoredValue("alpha-last-case", String(id));
 }
 
 function prefetchCase(client: ReturnType<typeof useQueryClient>, id: number, lang: Language) {
@@ -596,7 +600,7 @@ function CaseTableRow({ item, search, lang }: { item: CaseSummary; search: strin
   );
 }
 
-function Workspace({ mode }: { mode: "report" | "chat" | "sources" | "chat-sources" }) {
+function Workspace({ mode }: { mode: "report" | "sources" }) {
   const { id = "" } = useParams();
   const { lang, t } = useLocale();
   const location = useLocation();
@@ -606,7 +610,7 @@ function Workspace({ mode }: { mode: "report" | "chat" | "sources" | "chat-sourc
   const caseQuery = useQuery({
     queryKey: ["case", id, lang],
     queryFn: () => api.case(id, lang),
-    refetchInterval: (query) => query.state.data?.status === "analyzing" ? 3000 : false,
+    refetchInterval: (query) => query.state.data?.status === "analyzing" ? 1000 : false,
   });
   const current = caseQuery.data;
   const resultCases = results.data?.cases ?? [];
@@ -615,13 +619,13 @@ function Workspace({ mode }: { mode: "report" | "chat" | "sources" | "chat-sourc
   const next = index >= 0 && index < resultCases.length - 1 ? resultCases[index + 1] : undefined;
   const querySuffix = location.search;
   const backTarget = localizedPath("/cases", querySuffix, lang);
-  const isSources = mode === "sources" || mode === "chat-sources";
+  const isSources = mode === "sources";
   const previousId = previous?.id;
   const nextId = next?.id;
 
   useEffect(() => {
     if (current) {
-      localStorage.setItem("alpha-last-case", String(current.id));
+      writeStoredValue("alpha-last-case", String(current.id));
       if (current.case_name) sessionStorage.setItem("alpha-last-case-name", current.case_name);
     }
   }, [current?.case_name, current?.id]);
@@ -649,10 +653,8 @@ function Workspace({ mode }: { mode: "report" | "chat" | "sources" | "chat-sourc
   if (caseQuery.isPending) return <Loading />;
   if (!current || caseQuery.isError) return <ErrorPanel message={t("error")} />;
 
-  const sourcesPath = mode === "chat" || mode === "chat-sources"
-    ? `/cases/${id}/chat/sources` : `/cases/${id}/sources`;
-  const dataPath = mode === "chat" || mode === "chat-sources"
-    ? `/cases/${id}/chat` : `/cases/${id}`;
+  const sourcesPath = `/cases/${id}/sources`;
+  const dataPath = `/cases/${id}`;
 
   return (
     <div className={`workspace ${isSources ? "workspace-sources" : ""}`}>
@@ -664,7 +666,7 @@ function Workspace({ mode }: { mode: "report" | "chat" | "sources" | "chat-sourc
             <Link key={item.id} aria-current={String(item.id) === id ? "page" : undefined}
               className={`result-item ${String(item.id) === id ? "selected" : ""}`}
               onClick={() => rememberCase(item.id)}
-              to={localizedPath(`/cases/${item.id}${mode === "chat" || mode === "chat-sources" ? "/chat" : ""}`, querySuffix, lang)}>
+              to={localizedPath(`/cases/${item.id}`, querySuffix, lang)}>
               <div className="result-top"><span className="ltr">{item.case_number || `#${item.id}`}</span><CaseStatus value={item.status} /></div>
               <strong>{item.case_name || t("untitled")}</strong>
               <small>{item.case_type} · {item.location || t("noLocation")}</small>
@@ -690,7 +692,7 @@ function Workspace({ mode }: { mode: "report" | "chat" | "sources" | "chat-sourc
                     onClick={() => {
                       if (!previous) return;
                       rememberCase(previous.id);
-                      navigate(localizedPath(`/cases/${previous.id}${mode === "chat-sources" ? "/chat/sources" : "/sources"}`, querySuffix, lang));
+                      navigate(localizedPath(`/cases/${previous.id}/sources`, querySuffix, lang));
                     }}>
                     <Icon path={lang === "ar" ? mdiChevronRight : mdiChevronLeft} size={0.9} />
                   </button>
@@ -698,7 +700,7 @@ function Workspace({ mode }: { mode: "report" | "chat" | "sources" | "chat-sourc
                     onClick={() => {
                       if (!next) return;
                       rememberCase(next.id);
-                      navigate(localizedPath(`/cases/${next.id}${mode === "chat-sources" ? "/chat/sources" : "/sources"}`, querySuffix, lang));
+                      navigate(localizedPath(`/cases/${next.id}/sources`, querySuffix, lang));
                     }}>
                     <Icon path={lang === "ar" ? mdiChevronLeft : mdiChevronRight} size={0.9} />
                   </button>
@@ -709,37 +711,18 @@ function Workspace({ mode }: { mode: "report" | "chat" | "sources" | "chat-sourc
                 {current.date && <span><Icon path={mdiCalendar} size={0.75} />{current.date}</span>}
                 <CaseStatus value={current.status} /><Severity value={current.severity} /></div>
             </div>
-            <div className={`source-layout ${mode === "chat-sources" ? "source-layout-chat" : ""}`}>
-              {mode === "chat-sources" ? (
-                <>
-                  <div className="source-main" dir={lang}>
-                    <div className="mode-tabs">
-                      <NavLink end to={localizedPath(`/cases/${id}`, querySuffix, lang)}><Icon path={mdiFileDocumentOutline} size={0.8} />{t("report")}</NavLink>
-                      <NavLink className="active" to={localizedPath(`/cases/${id}/chat`, querySuffix, lang)}><Icon path={mdiMessageTextOutline} size={0.8} />{t("conversation")}<span className="tab-count">{current.message_count}</span></NavLink>
-                      <Link to={localizedPath(sourcesPath, querySuffix, lang)}><Icon path={mdiPaperclip} size={0.8} />{t("sources")}<span className="tab-count">{current.attachments.length}</span></Link>
-                    </div>
-                    <Conversation caseId={Number(id)} detail={current} />
-                  </div>
-                  <aside className="source-sidebar" dir={lang}>
-                    <SourcesInspector caseId={Number(id)} caseDetail={current} returnTo={dataPath} />
-                  </aside>
-                </>
-              ) : (
-                <>
-                  <aside className="source-sidebar" dir={lang}>
-                    <SourcesInspector caseId={Number(id)} caseDetail={current} returnTo={dataPath} />
-                  </aside>
-                  <div className="source-main" dir={lang}>
-                    <div className="mode-tabs">
-                      <NavLink end className="active" to={localizedPath(`/cases/${id}`, querySuffix, lang)}><Icon path={mdiFileDocumentOutline} size={0.8} />{t("report")}</NavLink>
-                      <NavLink to={localizedPath(`/cases/${id}/chat`, querySuffix, lang)}><Icon path={mdiMessageTextOutline} size={0.8} />{t("conversation")}<span className="tab-count">{current.message_count}</span></NavLink>
-                      <Link to={localizedPath(sourcesPath, querySuffix, lang)}><Icon path={mdiPaperclip} size={0.8} />{t("sources")}<span className="tab-count">{current.attachments.length}</span></Link>
-                    </div>
-                    <ReportView caseDetail={current} onAnalyze={() => analyze.mutate()} busy={analyze.isPending}
-                      onDelete={() => window.confirm(t("deleteConfirm")) && remove.mutate()} />
-                  </div>
-                </>
-              )}
+            <div className="source-layout">
+              <aside className="source-sidebar" dir={lang}>
+                <SourcesInspector caseId={Number(id)} caseDetail={current} returnTo={dataPath} />
+              </aside>
+              <div className="source-main" dir={lang}>
+                <div className="mode-tabs">
+                  <NavLink end className="active" to={localizedPath(`/cases/${id}`, querySuffix, lang)}><Icon path={mdiFileDocumentOutline} size={0.8} />{t("report")}</NavLink>
+                  <Link to={localizedPath(sourcesPath, querySuffix, lang)}><Icon path={mdiPaperclip} size={0.8} />{t("sources")}<span className="tab-count">{current.attachments.length}</span></Link>
+                </div>
+                <ReportView caseDetail={current} onAnalyze={() => analyze.mutate()} busy={analyze.isPending}
+                  onDelete={() => window.confirm(t("deleteConfirm")) && remove.mutate()} />
+              </div>
             </div>
           </>
         ) : (
@@ -753,7 +736,7 @@ function Workspace({ mode }: { mode: "report" | "chat" | "sources" | "chat-sourc
                   onClick={() => {
                     if (!previous) return;
                     rememberCase(previous.id);
-                    navigate(localizedPath(`/cases/${previous.id}${mode === "chat" ? "/chat" : ""}`, querySuffix, lang));
+                    navigate(localizedPath(`/cases/${previous.id}`, querySuffix, lang));
                   }}>
                   <Icon path={lang === "ar" ? mdiChevronRight : mdiChevronLeft} size={0.85} />
                 </button>
@@ -762,7 +745,7 @@ function Workspace({ mode }: { mode: "report" | "chat" | "sources" | "chat-sourc
                   onClick={() => {
                     if (!next) return;
                     rememberCase(next.id);
-                    navigate(localizedPath(`/cases/${next.id}${mode === "chat" ? "/chat" : ""}`, querySuffix, lang));
+                    navigate(localizedPath(`/cases/${next.id}`, querySuffix, lang));
                   }}>
                   <Icon path={lang === "ar" ? mdiChevronLeft : mdiChevronRight} size={0.85} />
                 </button>
@@ -780,7 +763,7 @@ function Workspace({ mode }: { mode: "report" | "chat" | "sources" | "chat-sourc
                     onClick={() => {
                       if (!previous) return;
                       rememberCase(previous.id);
-                      navigate(localizedPath(`/cases/${previous.id}${mode === "chat" ? "/chat" : ""}`, querySuffix, lang));
+                      navigate(localizedPath(`/cases/${previous.id}`, querySuffix, lang));
                     }}>
                     <Icon path={lang === "ar" ? mdiChevronRight : mdiChevronLeft} size={0.9} />
                   </button>
@@ -788,7 +771,7 @@ function Workspace({ mode }: { mode: "report" | "chat" | "sources" | "chat-sourc
                     onClick={() => {
                       if (!next) return;
                       rememberCase(next.id);
-                      navigate(localizedPath(`/cases/${next.id}${mode === "chat" ? "/chat" : ""}`, querySuffix, lang));
+                      navigate(localizedPath(`/cases/${next.id}`, querySuffix, lang));
                     }}>
                     <Icon path={lang === "ar" ? mdiChevronLeft : mdiChevronRight} size={0.9} />
                   </button>
@@ -801,13 +784,11 @@ function Workspace({ mode }: { mode: "report" | "chat" | "sources" | "chat-sourc
             </div>
             <div className="mode-tabs">
               <NavLink end to={localizedPath(`/cases/${id}`, querySuffix, lang)}><Icon path={mdiFileDocumentOutline} size={0.8} />{t("report")}</NavLink>
-              <NavLink to={localizedPath(`/cases/${id}/chat`, querySuffix, lang)}><Icon path={mdiMessageTextOutline} size={0.8} />{t("conversation")}<span className="tab-count">{current.message_count}</span></NavLink>
               <Link to={localizedPath(sourcesPath, querySuffix, lang)}><Icon path={mdiPaperclip} size={0.8} />{t("sources")}<span className="tab-count">{current.attachments.length}</span></Link>
             </div>
             {results.data && index < 0 && <div className="notice notice-info filter-warning">{t("noLongerMatches")}</div>}
-            {mode === "chat" ? <Conversation caseId={Number(id)} detail={current} /> :
-              <ReportView caseDetail={current} onAnalyze={() => analyze.mutate()} busy={analyze.isPending}
-                onDelete={() => window.confirm(t("deleteConfirm")) && remove.mutate()} />}
+            <ReportView caseDetail={current} onAnalyze={() => analyze.mutate()} busy={analyze.isPending}
+              onDelete={() => window.confirm(t("deleteConfirm")) && remove.mutate()} />
           </>
         )}
       </section>
@@ -985,72 +966,107 @@ function AttachmentRow({ file }: { file: Attachment }) {
   );
 }
 
-function Conversation({ caseId, detail }: { caseId: number; detail: CaseDetail }) {
+function LegacyChatRedirect({ sources = false }: { sources?: boolean }) {
+  const { id = "" } = useParams();
+  const location = useLocation();
+  return <Navigate to={`/cases/${id}${sources ? "/sources" : ""}${location.search}`} replace />;
+}
+
+/** The case open on the current page, if any: the assistant gets its full details. */
+function useOpenCaseId(): number | null {
+  const location = useLocation();
+  const match = location.pathname.match(/^\/cases\/(\d+)(\/|$)/);
+  return match ? Number(match[1]) : null;
+}
+
+function ChatWidget() {
   const { lang, t } = useLocale();
   const location = useLocation();
   const client = useQueryClient();
-  const [text, setText] = useState("");
+  const openCaseId = useOpenCaseId();
+  const [open, setOpen] = useState(() => sessionStorage.getItem("alpha-chat-open") === "1");
+  const [text, setText] = useState(() => sessionStorage.getItem("alpha-chat-draft") ?? "");
   const [fileList, setFileList] = useState<FileList | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true);
   const [hasNewMessages, setHasNewMessages] = useState(false);
-  const [updateNotice, setUpdateNotice] = useState(false);
-  const draftKey = `alpha-chat-draft:${caseId}`;
-  const messageKey = ["messages", caseId, lang];
+  const messageKey = ["messages", lang];
+  const sending = useRef(false);
+  const submission = useRef<{ text: string; caseId: number | null; lang: string; files: File[]; key: string } | null>(null);
 
   useEffect(() => {
-    setText(sessionStorage.getItem(draftKey) ?? "");
-  }, [draftKey]);
+    sessionStorage.setItem("alpha-chat-open", open ? "1" : "0");
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [open]);
   useEffect(() => {
-    if (text) sessionStorage.setItem(draftKey, text);
-    else sessionStorage.removeItem(draftKey);
-  }, [draftKey, text]);
+    if (text) sessionStorage.setItem("alpha-chat-draft", text);
+    else sessionStorage.removeItem("alpha-chat-draft");
+  }, [text]);
 
+  const openCase = useQuery({
+    queryKey: ["case", String(openCaseId), lang],
+    queryFn: () => api.case(openCaseId!, lang),
+    enabled: open && openCaseId !== null,
+  });
   const messages = useQuery({
     queryKey: messageKey,
-    queryFn: () => api.messages(caseId, lang),
-    refetchInterval: (query) => query.state.data?.some((message) => message.status === "pending") ? 3000 : false,
+    queryFn: () => api.messages(lang),
+    enabled: open,
+    refetchInterval: (query) => query.state.data?.some((message) => message.status === "pending") ? 1000 : false,
   });
   const send = useMutation({
-    mutationFn: () => {
+    mutationFn: (input: NonNullable<typeof submission.current>) => {
       const form = new FormData();
-      form.set("text", text);
-      Array.from(fileList ?? []).forEach((file) => form.append("files", file));
-      return api.sendMessage(caseId, form, lang);
+      form.set("text", input.text);
+      form.set("request_id", input.key);
+      if (input.caseId !== null) form.set("case_id", String(input.caseId));
+      input.files.forEach((file) => form.append("files", file));
+      return api.sendMessage(form, input.lang);
     },
     onMutate: async () => {
       await client.cancelQueries({ queryKey: messageKey });
       const previous = client.getQueryData<ChatMessage[]>(messageKey);
       const optimistic: ChatMessage = {
-        id: -Date.now(), case_id: caseId, role: "user", content: text, status: "ok",
+        id: -Date.now(), case_id: 0, role: "user", content: text, status: "ok",
         error: null, reply_to: null, attachments: [],
       };
       client.setQueryData<ChatMessage[]>(messageKey, (current) => [...(current ?? []), optimistic]);
+      nearBottom.current = true;
       return { previous };
     },
     onError: (_error, _variables, context) => {
       if (context?.previous) client.setQueryData(messageKey, context.previous);
     },
-    onSuccess: async () => {
-      setText("");
+    onSuccess: (_result, input) => {
+      setText((current) => current === input.text ? "" : current);
       setFileList(null);
-      sessionStorage.removeItem(draftKey);
-      await client.invalidateQueries({ queryKey: messageKey });
+      submission.current = null;
+      void client.invalidateQueries({ queryKey: messageKey });
     },
+    onSettled: () => { sending.current = false; },
   });
   const clear = useMutation({
-    mutationFn: () => api.clearMessages(caseId, lang),
+    mutationFn: () => api.clearMessages(lang),
     onSuccess: () => client.invalidateQueries({ queryKey: messageKey }),
   });
   const retry = useMutation({
     mutationFn: (messageId: number) => api.retry(messageId, lang),
     onSuccess: () => client.invalidateQueries({ queryKey: messageKey }),
   });
-  const update = useMutation({
-    mutationFn: (messageId: number) => api.updateReport(messageId, lang),
-    onSuccess: async () => {
-      setUpdateNotice(true);
-      await client.invalidateQueries({ queryKey: ["case", String(caseId)] });
+  const decide = useMutation({
+    mutationFn: ({ messageId, confirm }: { messageId: number; confirm: boolean }) =>
+      confirm ? api.confirmAction(messageId, lang) : api.cancelAction(messageId, lang),
+    // Refresh the conversation even when the change was refused, so the card shows why;
+    // a confirmed change shows up on every page that lists or shows cases.
+    onSettled: async () => {
+      await client.invalidateQueries({ queryKey: messageKey });
+      await client.invalidateQueries({ queryKey: ["cases"] });
+      await client.invalidateQueries({ queryKey: ["case"] });
     },
   });
   useEffect(() => {
@@ -1060,78 +1076,186 @@ function Conversation({ caseId, detail }: { caseId: number; detail: CaseDetail }
     } else if (messages.data?.length) {
       setHasNewMessages(true);
     }
-  }, [messages.data]);
+  }, [messages.data, open]);
 
+  const canSend = !send.isPending && Boolean(text.trim() || fileList?.length);
+  const sendCurrent = () => {
+    if (!canSend || sending.current) return;
+    const files = Array.from(fileList ?? []);
+    const previous = submission.current;
+    if (!previous || previous.text !== text || previous.caseId !== openCaseId || previous.lang !== lang ||
+      previous.files.length !== files.length || previous.files.some((file, index) => file !== files[index])) {
+      submission.current = { text, caseId: openCaseId, lang, files, key: crypto.randomUUID() };
+    }
+    sending.current = true;
+    send.mutate(submission.current!);
+  };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (text.trim() || fileList?.length) send.mutate();
+    sendCurrent();
   };
-  const attachmentMessageIds = new Set((messages.data ?? [])
-    .filter((item) => item.role === "user" && item.attachments.length > 0)
-    .map((item) => item.id));
+  const pending = (messages.data ?? []).some((message) => message.status === "pending");
+
+  if (!open) {
+    return (
+      <button className="chat-launcher" aria-label={t("openAssistant")} title={t("openAssistant")}
+        onClick={() => { nearBottom.current = true; setOpen(true); }}>
+        <Icon path={mdiMessageTextOutline} size={1.1} />
+        {pending && <span className="chat-launcher-dot" />}
+      </button>
+    );
+  }
   return (
-    <div className="conversation">
-      <div className="conversation-top">
-        <div><span className="eyebrow">{detail.case_number || `CASE-${caseId}`}</span><h2>{t("conversation")}</h2></div>
-        <button className="text-button danger-text" onClick={() => window.confirm(t("clearChat")) && clear.mutate()}>{t("clearChat")}</button>
-      </div>
-      {updateNotice && <div className="notice notice-info update-notice">{t("reportUpdated")}
-        <Link to={localizedPath(`/cases/${caseId}`, location.search, lang)}>{t("report")}</Link>
-      </div>}
-      <div className="transcript" ref={transcriptRef} onScroll={(event) => {
-        const element = event.currentTarget;
-        nearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 100;
-        if (nearBottom.current) setHasNewMessages(false);
-      }}>
-        {messages.isPending ? <Loading /> : (messages.data ?? []).length === 0 ? <EmptyState title={t("noMessages")} /> :
-          (messages.data ?? []).map((message) => (
-            <MessageBubble key={message.id} message={message} onRetry={() => retry.mutate(message.id)}
-              reportAutoUpdated={Boolean(message.reply_to && attachmentMessageIds.has(message.reply_to))}
-              onUpdate={() => window.confirm(t("updateConfirm")) && update.mutate(message.id)} />
-          ))}
-        {hasNewMessages && <button className="button button-secondary new-reply-button"
-          onClick={() => { if (transcriptRef.current) transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight; }}>
-          {t("newReply")}
-        </button>}
-      </div>
-      <form className="composer" onSubmit={submit}>
-        {fileList && fileList.length > 0 && <div className="composer-files">{Array.from(fileList).map((file) => <span key={file.name}>{file.name}</span>)}</div>}
-        <div className="composer-row">
-          <label className="icon-button attach-button" title={t("upload")}>＋<input className="sr-only" type="file" multiple onChange={(event) => setFileList(event.target.files)} /></label>
-          <textarea value={text} rows={1} onChange={(event) => setText(event.target.value)}
-            placeholder={t("writeMessage")} onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                if (text.trim() || fileList?.length) send.mutate();
-              }
-            }} />
-          <button className="button button-primary send-button" type="submit" disabled={send.isPending || (!text.trim() && !fileList?.length)}>{t("send")}</button>
+    <section className="chat-panel" dir={lang} role="dialog" aria-label={t("assistant")}>
+      <div className="conversation">
+        <div className="conversation-top">
+          <div><h2>{t("assistant")}</h2><small className="muted">{t("assistantHint")}</small></div>
+          <div className="chat-panel-actions">
+            <button className="text-button danger-text" disabled={!messages.data?.length}
+              onClick={() => window.confirm(t("clearChat")) && clear.mutate()}>{t("clearChat")}</button>
+            <button className="icon-button" aria-label={t("close")} title={t("close")} onClick={() => setOpen(false)}>
+              <Icon path={mdiClose} size={0.85} />
+            </button>
+          </div>
         </div>
-        {send.isError && <p className="form-error">{send.error.message}</p>}
-      </form>
-    </div>
+        {openCaseId !== null && (
+          <div className="chat-focus">
+            <span>{t("askingAbout")}</span>
+            <Link to={localizedPath(`/cases/${openCaseId}`, location.search, lang)}>
+              <span className="ltr">{openCase.data?.case_number || `#${openCaseId}`}</span>
+              {openCase.data?.case_name ? ` · ${openCase.data.case_name}` : ""}
+            </Link>
+          </div>
+        )}
+        <div className="transcript" ref={transcriptRef} onScroll={(event) => {
+          const element = event.currentTarget;
+          nearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 100;
+          if (nearBottom.current) setHasNewMessages(false);
+        }}>
+          {messages.isPending ? <Loading /> : messages.isError ? <ErrorPanel message={t("error")} /> :
+            (messages.data ?? []).length === 0 ? <EmptyState title={t("noMessages")} /> :
+            (messages.data ?? []).map((message) => (
+              <MessageBubble key={message.id} message={message} onRetry={() => retry.mutate(message.id)}
+                onDecide={(confirm) => decide.mutate({ messageId: message.id, confirm })}
+                deciding={decide.isPending && decide.variables?.messageId === message.id}
+                decideError={decide.isError && decide.variables?.messageId === message.id ? decide.error.message : ""} />
+            ))}
+          {hasNewMessages && <button className="button button-secondary new-reply-button"
+            onClick={() => { if (transcriptRef.current) transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight; }}>
+            {t("newReply")}
+          </button>}
+        </div>
+        <form className="composer" onSubmit={submit}>
+          {fileList && fileList.length > 0 && <div className="composer-files">{Array.from(fileList).map((file) => <span key={file.name}>{file.name}</span>)}</div>}
+          <div className="composer-row">
+            <label className="icon-button attach-button" title={t("upload")}>＋<input className="sr-only" type="file" multiple onChange={(event) => setFileList(event.target.files)} /></label>
+            <textarea value={text} rows={1} autoFocus onChange={(event) => setText(event.target.value)}
+              placeholder={t("writeMessage")} onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  sendCurrent();
+                }
+              }} />
+            <button className="button button-primary send-button" type="submit" disabled={!canSend}>{t("send")}</button>
+          </div>
+          {send.isError && <p className="form-error">{send.error.message}</p>}
+        </form>
+      </div>
+    </section>
   );
 }
 
-function MessageBubble({ message, reportAutoUpdated, onRetry, onUpdate }: {
-  message: ChatMessage; onRetry: () => void; onUpdate: () => void;
-  reportAutoUpdated: boolean;
-}) {
+type MessageBubbleProps = {
+  message: ChatMessage;
+  onRetry: () => void;
+  onDecide: (confirm: boolean) => void;
+  deciding: boolean;
+  decideError: string;
+};
+
+function MessageBubble({ message, onRetry, onDecide, deciding, decideError }: MessageBubbleProps) {
   const { lang, t } = useLocale();
   const mine = message.role === "user";
   return (
     <article className={`message-row ${mine ? "message-mine" : "message-theirs"}`}>
       <div className="message-meta">{mine ? (lang === "ar" ? "أنت" : "You") : "Alpha"} <time>{message.status}</time></div>
-      <div className="message-bubble">
+      {(message.status !== "ok" || message.content || !message.action) && <div className="message-bubble">
         {message.status === "pending" ? <span className="typing"><i /><i /><i /></span> : message.content}
         {message.status === "failed" && <div className="message-error">{message.error}</div>}
-      </div>
+      </div>}
+      {message.status === "ok" && message.action && (
+        <ActionCard action={message.action} onDecide={onDecide} deciding={deciding} error={decideError} />
+      )}
       {message.attachments?.map((file) => <AttachmentRow key={file.id} file={file} />)}
       {message.status === "failed" && <button className="text-button" onClick={onRetry}>{t("retry")}</button>}
-      {!mine && message.status === "ok" && (reportAutoUpdated
-        ? <small className="message-report-note">{t("attachmentReportAdded")}</small>
-        : <button className="text-button" onClick={onUpdate}>{t("updateReport")}</button>)}
     </article>
+  );
+}
+
+const ACTION_TITLES = {
+  create_case: "actionCreate", update_case: "actionUpdate", analyze_case: "actionAnalyze", unknown: "actionUnknown",
+} as const;
+const ACTION_STATUSES = {
+  pending: "actionPending", applying: "actionApplying", confirmed: "actionConfirmed",
+  cancelled: "actionCancelled", failed: "actionFailed", invalid: "actionInvalid",
+} as const;
+const FIELD_LABELS = {
+  case_name: "caseName", case_number: "caseNumber", case_type: "type", location: "location",
+  date: "date", case_text: "caseText", severity: "severity",
+} as const;
+
+/** A change to the register that a reply proposes; nothing is saved until it is confirmed. */
+function ActionCard({ action, onDecide, deciding, error }: {
+  action: ChatAction;
+  onDecide: (confirm: boolean) => void;
+  deciding: boolean;
+  error: string;
+}) {
+  const { lang, t } = useLocale();
+  const location = useLocation();
+  const shown = (field: string, value: string | null) => {
+    if (value === null || value === "") return <span className="muted">{t("actionEmptyValue")}</span>;
+    if (field === "case_type") return caseTypeLabel(value, lang);
+    if (field === "severity" && (value === "high" || value === "medium" || value === "low")) return t(value);
+    return value;
+  };
+  const title = t(ACTION_TITLES[action.type] ?? "actionUnknown");
+  const target = action.case_number || (action.case_id ? `#${action.case_id}` : "");
+  return (
+    <div className={`action-card action-${action.status}`} role="group" aria-label={title}>
+      <div className="action-card-head">
+        <strong>{title}{action.type !== "create_case" && target && <> <span className="ltr">{target}</span></>}</strong>
+        <span className="action-state">{t(ACTION_STATUSES[action.status] ?? "actionInvalid")}</span>
+      </div>
+      {action.changes.length > 0 && (
+        <dl className="action-changes">
+          {action.changes.map((change) => (
+            <div key={change.field}>
+              <dt>{t(FIELD_LABELS[change.field])}</dt>
+              <dd>
+                {action.type === "update_case" && <><del>{shown(change.field, change.before)}</del><span aria-hidden="true"> → </span></>}
+                <ins>{shown(change.field, change.after)}</ins>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {action.append_text && <div className="action-append"><small className="muted">{t("actionAppend")}</small><p>{action.append_text}</p></div>}
+      {action.type === "analyze_case" && action.status === "pending" && <p className="muted action-note">{t("actionAnalyzeHint")}</p>}
+      {action.error && <div className="message-error">{action.error}</div>}
+      {error && <div className="message-error">{error}</div>}
+      {action.status === "pending" && (
+        <div className="action-buttons">
+          <button className="button button-primary button-small" disabled={deciding} onClick={() => onDecide(true)}>{t("confirmAction")}</button>
+          <button className="button button-secondary button-small" disabled={deciding} onClick={() => onDecide(false)}>{t("cancelAction")}</button>
+        </div>
+      )}
+      {action.status === "confirmed" && action.case_id && (
+        <Link className="text-button" to={localizedPath(`/cases/${action.case_id}`, location.search, lang)}>
+          {t("showCase")} <span className="ltr">{action.case_number}</span>
+        </Link>
+      )}
+    </div>
   );
 }
 
@@ -1161,8 +1285,18 @@ function CaseEditor() {
   const hydratedCaseId = useRef<string | null>(null);
   const skipBlock = useRef(false);
   const createInProgress = useRef(false);
+  const saveInProgress = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const sourceText = useRef(caseText);
+  sourceText.current = caseText;
+  const suggestionAbort = useRef<AbortController | null>(null);
   const suggestedCaseId = useRef<string | null>(null);
   const suggestionCancelled = useRef(false);
+  useEffect(() => () => {
+    suggestionCancelled.current = true;
+    suggestionAbort.current?.abort();
+    suggestedCaseId.current = null;
+  }, []);
   const caseQuery = useQuery({
     queryKey: ["case", id, lang],
     queryFn: () => api.case(id!, lang),
@@ -1186,6 +1320,7 @@ function CaseEditor() {
         },
       };
       setCaseText(item.case_text);
+      sourceText.current = item.case_text;
       setFields(savedValues.current.fields);
       locationValue.current = savedValues.current.fields.location;
       setPoint(savedValues.current.point);
@@ -1250,6 +1385,11 @@ function CaseEditor() {
     const item = caseQuery.data;
     if (!isEdit || params.get("flow") !== "new" || step !== 2 || !item || suggestedCaseId.current === id) return;
     suggestedCaseId.current = id ?? null;
+    suggestionAbort.current?.abort();
+    const controller = new AbortController();
+    suggestionAbort.current = controller;
+    const originalText = item.case_text;
+    const isCurrent = () => !controller.signal.aborted && !suggestionCancelled.current && sourceText.current === originalText;
     suggestionCancelled.current = false;
     setSuggestionPending(true);
     setSuggestionFailed(false);
@@ -1261,8 +1401,8 @@ function CaseEditor() {
     };
     const initialPoint = item.latitude == null || item.longitude == null
       ? null : { latitude: item.latitude, longitude: item.longitude };
-    void api.suggest(Number(id), lang).then((suggestion) => {
-      if (suggestionCancelled.current) return;
+    void api.suggest(Number(id), lang, controller.signal).then((suggestion) => {
+      if (!isCurrent()) return;
       setFields((current) => ({
         ...current,
         case_name: current.case_name === initialFields.case_name
@@ -1285,21 +1425,21 @@ function CaseEditor() {
       if (suggestedLocation && canApplyLocation) {
         locationValue.current = suggestedLocation;
         void api.geocode(suggestedLocation, lang).then((point) => {
-          if (suggestionCancelled.current || locationValue.current !== suggestedLocation) return;
+          if (!isCurrent() || locationValue.current !== suggestedLocation) return;
           if (point) {
             setPoint((current) => current?.latitude === initialPoint?.latitude &&
               current?.longitude === initialPoint?.longitude ? point : current);
           }
         }).catch(() => {
-          if (!suggestionCancelled.current && locationValue.current === suggestedLocation) {
+          if (isCurrent() && locationValue.current === suggestedLocation) {
             setLocationNotice(t("locationNotFound"));
           }
         });
       }
     }).catch(() => {
-      if (!suggestionCancelled.current) setSuggestionFailed(true);
+      if (isCurrent()) setSuggestionFailed(true);
     }).finally(() => {
-      setSuggestionPending(false);
+      if (suggestionAbort.current === controller) setSuggestionPending(false);
     });
   }, [caseQuery.data, id, isEdit, lang, params, step]);
   const nextStep = async () => {
@@ -1318,7 +1458,11 @@ function CaseEditor() {
     }
   };
   const save = async (analyze: boolean) => {
+    if (saveInProgress.current) return;
+    saveInProgress.current = true;
+    setSaving(true);
     suggestionCancelled.current = true;
+    suggestionAbort.current?.abort();
     setSuggestionPending(false);
     setFlowError("");
     const analyzeUpdatedCase = analyze || newAttachmentsUploaded;
@@ -1342,6 +1486,9 @@ function CaseEditor() {
       navigate(localizedPath(`/cases/${id}`, location.search, lang));
     } catch (error) {
       setFlowError(error instanceof Error ? error.message : t("unknownError"));
+    } finally {
+      saveInProgress.current = false;
+      setSaving(false);
     }
   };
 
@@ -1454,8 +1601,8 @@ function CaseEditor() {
                   <AttachmentRow key={file.id} file={file} />)}</div> : <p className="muted">{t("noAttachments")}</p>)}
             </>}
             <div className="editor-footer editor-footer-wrap">
-              <button className="button button-secondary" onClick={() => void save(false)} disabled={patch.isPending || geocode.isPending || upload.isPending}>{isEdit ? t("save") : t("saveDraft")}</button>
-              <button className="button button-primary" onClick={() => void save(true)} disabled={patch.isPending || geocode.isPending || upload.isPending}>{t("saveAnalyze")}</button>
+              <button className="button button-secondary" onClick={() => void save(false)} disabled={saving || patch.isPending || geocode.isPending || upload.isPending}>{isEdit ? t("save") : t("saveDraft")}</button>
+              <button className="button button-primary" onClick={() => void save(true)} disabled={saving || patch.isPending || geocode.isPending || upload.isPending}>{t("saveAnalyze")}</button>
             </div>
             {flowError && <p className="form-error">{flowError}</p>}
           </section>
