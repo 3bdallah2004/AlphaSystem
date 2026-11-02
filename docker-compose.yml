@@ -109,6 +109,7 @@ services:
     restart: unless-stopped
     environment:
       ALPHA_WORKER: api
+      ALPHA_COOKIE_SECURE: ${ALPHA_COOKIE_SECURE:-true}
       ALPHA_WEBHOOK_URL: http://n8n:5678/webhook/alpha-analyze
       ALPHA_DB_PATH: /data/alpha_database.db
       ALPHA_ATTACHMENTS_DIR: /data/attachments

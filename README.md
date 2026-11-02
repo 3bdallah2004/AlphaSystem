@@ -21,6 +21,11 @@ n8n -> PostgreSQL
 - **n8n:** Runs the workflow in `n8n/workflows/alpha-analysis.json`. The workflow is imported and published automatically at startup.
 - **PostgreSQL:** Stores n8n workflows and execution data.
 - **SQLite:** Stores investigation cases, messages, reports, and attachment metadata.
+- **Privacy:** Each browser gets an anonymous, private workspace. Its session cookie is
+  HttpOnly; cases, chat, and uploaded files are stored separately from other workspaces.
+  Clearing the cookie or browser data creates a new workspace, and the previous one cannot
+  be recovered through the app. Existing shared database contents are preserved on disk
+  but are not shown in anonymous workspaces.
 
 ## Requirements
 
@@ -88,6 +93,7 @@ For Ollama, `LLM_API_KEY` can contain any value; Ollama does not use it.
 | `LLM_PROVIDERS` and `LLM_<n>_URL` / `_KEY` / `_MODEL` / `_VISION_MODEL` | Configure multiple providers in priority order | — |
 | `BACKUP_LLM_BASE_URL` / `BACKUP_LLM_API_KEY` / `BACKUP_LLM_MODEL` | Configure a second provider using the legacy variable names | — |
 | `ALPHA_WEBHOOK_TOKEN` | Shared secret required by the app and n8n; startup scripts generate one if missing | Empty means no webhook authentication |
+| `ALPHA_COOKIE_SECURE` | Require HTTPS for the anonymous workspace cookie | `true` in Docker Compose; `false` for local development |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | n8n database credentials | `n8n` / required / `n8n` |
 | `TIMEZONE` | Time zone used by n8n | `UTC` |
 | `WEB_PORT` / `N8N_PORT` | Host ports for the website and n8n | `8601` / `5678` |
@@ -130,14 +136,14 @@ npm run dev
 
 The Vite development server runs at `http://localhost:5173` and proxies `/api` requests to FastAPI on port `8000`.
 
-## Case conversations
+## Assistant
 
-After analysis, each case has a report and a conversation. Users can ask questions about the case, add information, and attach files to messages. Responses use the original report, the latest analysis, and up to the last 20 conversation messages.
+A single assistant is available from the chat button on every page. It is one conversation across all cases: users can ask about any case, compare cases, look for patterns, and attach files to messages. Each reply uses an overview of every registered case (number, title, type, status, severity, location, date and a summary of its analysis), the full report and analysis of the case open on screen when the question was asked, and up to the last 20 conversation messages.
 
+- The conversation stays open while moving between pages and cases.
 - Replies are generated in the background so users can continue working.
 - Failed replies can be retried without losing the original question.
-- A reply can be added to the case report while preserving previous report versions.
-- Clearing a conversation removes its messages and message attachments without deleting case attachments.
+- Clearing the conversation removes its messages and message attachments without deleting case attachments.
 - Pending replies are marked as failed after a service restart and can be retried.
 
 ## Attachments and multimodal analysis

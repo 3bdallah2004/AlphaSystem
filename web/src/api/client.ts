@@ -32,7 +32,18 @@ export type CaseDetail = CaseSummary & {
   report_raw: string;
   versions: { id: number; timestamp: string; report_text: string }[];
   attachments: Attachment[];
-  message_count: number;
+};
+export type ChatActionField =
+  "case_name" | "case_number" | "case_type" | "location" | "date" | "case_text" | "severity";
+export type ChatAction = {
+  type: "create_case" | "update_case" | "analyze_case" | "unknown";
+  status: "pending" | "applying" | "confirmed" | "cancelled" | "failed" | "invalid";
+  case_id?: number | null;
+  case_number?: string;
+  case_name?: string;
+  changes: { field: ChatActionField; before: string | null; after: string | null }[];
+  append_text?: string | null;
+  error?: string | null;
 };
 export type ChatMessage = {
   id: number;
@@ -43,6 +54,7 @@ export type ChatMessage = {
   error: string | null;
   reply_to: number | null;
   attachments: Attachment[];
+  action?: ChatAction | null;
 };
 export type CaseListResponse = { cases: CaseSummary[]; stats: Record<string, unknown>; count: number };
 export type APIError = { error?: { code?: string; message?: string } };
@@ -64,7 +76,6 @@ function normalizeCaseDetail(detail: CaseDetail): CaseDetail {
     case_text: typeof detail.case_text === "string" ? detail.case_text : "",
     versions: Array.isArray(detail.versions) ? detail.versions : [],
     attachments: Array.isArray(detail.attachments) ? detail.attachments : [],
-    message_count: detail.message_count ?? 0,
   };
 }
 
@@ -73,8 +84,8 @@ export const api = {
     request<CaseListResponse>(`/api/cases?${query.toString()}`, language),
   case: async (id: string | number, language: string) =>
     normalizeCaseDetail(await request<CaseDetail>(`/api/cases/${id}`, language)),
-  messages: (id: string | number, language: string) =>
-    request<ChatMessage[]>(`/api/cases/${id}/messages`, language),
+  messages: (language: string) =>
+    request<ChatMessage[]>("/api/chat/messages", language),
   attachments: (id: string | number, language: string) =>
     request<Attachment[]>(`/api/cases/${id}/attachments`, language),
   createCase: async (case_text: string, language: string) =>
@@ -91,23 +102,25 @@ export const api = {
     });
     return { ...result, case: normalizeCaseDetail(result.case) };
   },
-  suggest: (id: number, language: string) =>
-    request<Partial<CaseDetail>>(`/api/cases/${id}/suggest`, language, { method: "POST" }),
+  suggest: (id: number, language: string, signal?: AbortSignal) =>
+    request<Partial<CaseDetail>>(`/api/cases/${id}/suggest`, language, { method: "POST", signal }),
   analyze: (id: number, language: string) =>
     request<{ status: string }>(`/api/cases/${id}/analyze`, language, { method: "POST" }),
   removeCase: (id: number, language: string) =>
     request<void>(`/api/cases/${id}`, language, { method: "DELETE" }),
-  sendMessage: (id: number, form: FormData, language: string) =>
-    request<{ message_id: number; reply_id: number }>(`/api/cases/${id}/messages`, language, {
+  sendMessage: (form: FormData, language: string) =>
+    request<{ message_id: number; reply_id: number }>("/api/chat/messages", language, {
       method: "POST",
       body: form,
     }),
-  clearMessages: (id: number, language: string) =>
-    request<void>(`/api/cases/${id}/messages`, language, { method: "DELETE" }),
+  confirmAction: (id: number, language: string) =>
+    request<ChatAction>(`/api/messages/${id}/action/confirm`, language, { method: "POST" }),
+  cancelAction: (id: number, language: string) =>
+    request<ChatAction>(`/api/messages/${id}/action/cancel`, language, { method: "POST" }),
+  clearMessages: (language: string) =>
+    request<void>("/api/chat/messages", language, { method: "DELETE" }),
   retry: (id: number, language: string) =>
     request<{ status: string }>(`/api/messages/${id}/retry`, language, { method: "POST" }),
-  updateReport: (id: number, language: string) =>
-    request<{ status: string }>(`/api/messages/${id}/update-report`, language, { method: "POST" }),
   upload: (id: number, files: FileList | File[], language: string,
     options: { reanalyze?: boolean } = {}) => {
     const form = new FormData();

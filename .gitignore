@@ -36,3 +36,9 @@ Thumbs.db
 .vscode/
 .idea/
 *.log
+
+# Agent & Tool outputs
+graphify-out/
+.agents/
+skills-lock.json
+.kombai/

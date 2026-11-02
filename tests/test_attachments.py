@@ -128,4 +128,4 @@ def test_remove_for_case_cleans_folder(database, case):
     attachments.save(case, Uploaded("a.txt", b"x"))
     attachments.save(case, Uploaded("b.txt", b"y"))
     attachments.remove_for_case(case)
-    assert not (Path(attachments.ATTACHMENTS_DIR) / str(case)).exists()
+    assert not (Path(attachments.db.current_attachments_dir()) / str(case)).exists()

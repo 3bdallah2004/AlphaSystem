@@ -26,6 +26,9 @@ WEBHOOK_TOKEN = (os.getenv("ALPHA_WEBHOOK_TOKEN") or "").strip()
 DB_PATH = os.getenv("ALPHA_DB_PATH") or _default_db_path()
 REQUEST_TIMEOUT = int(os.getenv("ALPHA_REQUEST_TIMEOUT") or 120)
 ALPHA_WORKER = (os.getenv("ALPHA_WORKER") or "api").strip() or "api"
+WORKSPACE_COOKIE_SECURE = (os.getenv("ALPHA_COOKIE_SECURE") or "0").strip().lower() in (
+    "1", "true", "yes", "on"
+)
 
 # ── Model providers ───────────────────────────────────────────────────────────
 # Any number of OpenAI-compatible providers can be configured, tried in order. When one

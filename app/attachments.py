@@ -70,18 +70,18 @@ def safe_name(name):
 
 
 def _path(rel):
-    return Path(ATTACHMENTS_DIR) / rel
+    return Path(db.current_attachments_dir()) / rel
 
 
 def _resolve(rel):
     """Path for a stored file, refusing any name that would reach outside the attachments folder."""
-    root = Path(ATTACHMENTS_DIR).resolve()
+    root = Path(db.current_attachments_dir()).resolve()
     target = (root / rel).resolve()
     return target if root in target.parents else None
 
 
 def ensure_dir():
-    os.makedirs(ATTACHMENTS_DIR, exist_ok=True)
+    os.makedirs(db.current_attachments_dir(), exist_ok=True)
 
 
 def save(case_id, uploaded, message_id=None):

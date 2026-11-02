@@ -3,6 +3,7 @@
 Environment is set before `config` is imported anywhere, because config reads it once at
 import time and db.py binds DB_PATH at import as well.
 """
+import hashlib
 import os
 import sys
 import tempfile
@@ -19,6 +20,7 @@ _TMP = tempfile.mkdtemp(prefix="alpha-tests-")
 # Data always goes to a throwaway folder, live run or not.
 os.environ["ALPHA_DB_PATH"] = str(Path(_TMP) / "test.db")
 os.environ["ALPHA_ATTACHMENTS_DIR"] = str(Path(_TMP) / "attachments")
+os.environ["ALPHA_COOKIE_SECURE"] = "0"
 os.environ["ALPHA_VISION_ENABLED"] = "1"
 
 if LIVE:
@@ -40,15 +42,18 @@ else:
 
 
 @pytest.fixture()
-def database():
+def database(monkeypatch):
     """A freshly created database for one test."""
     import db as db_module
+    import attachments
 
-    path = Path(os.environ["ALPHA_DB_PATH"])
-    path.unlink(missing_ok=True)
-    db_module.init_db()
-    yield db_module
-    if path.exists():
+    workspace_id = hashlib.sha256(("a" * 64).encode("ascii")).hexdigest()
+    with db_module.workspace(workspace_id):
+        path = Path(db_module.current_db_path())
+        path.unlink(missing_ok=True)
+        db_module.init_db()
+        monkeypatch.setattr(attachments, "ATTACHMENTS_DIR", db_module.current_attachments_dir())
+        yield db_module
         path.unlink(missing_ok=True)
 
 

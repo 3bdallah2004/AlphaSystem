@@ -1,0 +1,24 @@
+{
+  "name": "alphasystem2",
+  "version": "1.0.0",
+  "description": "Alpha is a bilingual (Arabic and English) application for managing investigation cases and reviewing AI-assisted analysis. Users can organize case details, work with supporting files, chat about case information, and view incident locations on a map.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/3bdallah2004/AlphaSystem.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/3bdallah2004/AlphaSystem/issues"
+  },
+  "homepage": "https://github.com/3bdallah2004/AlphaSystem#readme"
+}

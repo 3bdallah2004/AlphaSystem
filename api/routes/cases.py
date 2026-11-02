@@ -55,7 +55,6 @@ def get_case(case_id: int, lang=Depends(get_language)):
         "report_raw": report_text,
         "versions": db.list_report_versions(case_id),
         "attachments": db.list_case_files(case_id),
-        "message_count": len(db.list_messages(case_id)),
     }
 
 
@@ -74,7 +73,7 @@ def patch_case(case_id: int, payload: CasePatch, lang=Depends(get_language)):
     if "location" in payload.model_fields_set and not (
         {"latitude", "longitude"} & payload.model_fields_set
     ):
-        analysis.locate(case_id, lang)
+        analysis.locate_later(case_id, lang)
     updated = db.get_case(case_id)
     updated.pop("worker", None)
     return {
@@ -86,7 +85,11 @@ def patch_case(case_id: int, payload: CasePatch, lang=Depends(get_language)):
 @router.post("/cases/{case_id}/suggest")
 def suggest_case_details(case_id: int, lang=Depends(get_language)):
     case = require_case(case_id, lang, db)
-    return analysis.suggest_details(case.get("case_text") or "", lang)
+    source = case.get("case_text") or ""
+    result = analysis.suggest_details(source, lang, case_id)
+    if (require_case(case_id, lang, db).get("case_text") or "") != source:
+        fail(409, "source_changed", "تغير نص البلاغ." if lang == "ar" else "The complaint text changed.")
+    return result
 
 
 @router.post("/cases/{case_id}/analyze", status_code=status.HTTP_202_ACCEPTED)
