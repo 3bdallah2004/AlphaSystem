@@ -109,6 +109,14 @@ async def request_timing(request: Request, call_next):
     response.headers["Server-Timing"] = f"app;dur={(time.perf_counter() - started) * 1000:.2f}"
     return response
 
+
+@app.middleware("http")
+async def request_timing(request: Request, call_next):
+    started = time.perf_counter()
+    response = await call_next(request)
+    response.headers["Server-Timing"] = f"app;dur={(time.perf_counter() - started) * 1000:.2f}"
+    return response
+
 if os.getenv("ALPHA_ENV") == "development":
     app.add_middleware(
         CORSMiddleware,
