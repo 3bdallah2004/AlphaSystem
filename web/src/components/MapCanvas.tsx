@@ -54,8 +54,8 @@ export default function MapCanvas(props: Props) {
     <div className="leaflet-map-wrap">
       <MapContainer center={[31.95, 35.2]} zoom={8} scrollWheelZoom className="leaflet-map">
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         <MarkerLayer {...props} />
       </MapContainer>

@@ -28,8 +28,8 @@ export default function LocationPicker({ point, onChange }: {
   return (
     <MapContainer center={center} zoom={point ? 13 : 8} scrollWheelZoom className="location-picker-map">
       <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       <MapClick onChange={onChange} />
       <Recenter point={point} />
