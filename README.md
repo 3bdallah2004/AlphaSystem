@@ -2,21 +2,21 @@
 
 Alpha is a bilingual (Arabic and English) application for managing investigation cases and reviewing AI-assisted analysis. Users can organize case details, work with supporting files, chat about case information, and view incident locations on a map.
 
-The React interface runs on port `8601` and communicates with a FastAPI backend. The backend stores case data and attachments in SQLite and sends analysis requests to an n8n workflow. n8n uses PostgreSQL for its workflows and execution data. The former Streamlit interface has been removed.
+The React interface runs on port `8601` by default and also listens on port `8061` for existing Dev Tunnel links. It communicates with a FastAPI backend. The backend stores case data and attachments in SQLite and sends analysis requests to an n8n workflow. n8n uses PostgreSQL for its workflows and execution data. The former Streamlit interface has been removed.
 
 The interface and generated analysis are available in Arabic and English. The About page includes developer information and contact links.
 
 ## Architecture
 
 ```text
-Browser :8601 -> React + nginx -> FastAPI :8000 -> n8n :5678 -> language / vision model
+Browser :8601 or :8061 -> React + nginx -> FastAPI :8000 -> n8n :5678 -> language / vision model
                                      |
                                 SQLite + attachments
 
 n8n -> PostgreSQL
 ```
 
-- **Web:** React application served by nginx on port `8601`; nginx forwards `/api` requests to FastAPI.
+- **Web:** React application served by nginx on port `8601` by default (also `8061`); nginx forwards `/api` requests to FastAPI.
 - **API:** FastAPI service that uses the shared analysis, chat, and attachment modules in `app/`.
 - **n8n:** Runs the workflow in `n8n/workflows/alpha-analysis.json`. The workflow is imported and published automatically at startup.
 - **PostgreSQL:** Stores n8n workflows and execution data.
